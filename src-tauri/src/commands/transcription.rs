@@ -1,0 +1,32 @@
+//! Re-transcribe a saved recording against a (possibly different) language,
+//! running the original audio back through the realtime API and updating the
+//! stored transcript.
+
+use tauri::{AppHandle, Emitter, Manager};
+
+use crate::commands::config;
+use crate::events;
+use crate::history::{self, HistoryDb};
+use crate::transcription::{OpenAiRealtimeTranscriber, Transcriber};
+
+#[tauri::command]
+pub async fn retranscribe(
+    app: AppHandle,
+    id: i64,
+    language: Option<String>,
+) -> Result<String, String> {
+    let item = history::get(&app.state::<HistoryDb>(), id).ok_or("recording not found")?;
+    let pcm16 = history::read_wav(&item.audio_path)?;
+    let key = config::get_api_key().ok_or("No OpenAI API key set.")?;
+
+    let transcriber = OpenAiRealtimeTranscriber::new(key);
+    let on_delta = |_t: String| {};
+    let text = transcriber
+        .transcribe(&pcm16, language.as_deref(), &on_delta)
+        .await?;
+
+    let lang = language.as_deref().unwrap_or("auto");
+    history::update_transcript(&app.state::<HistoryDb>(), id, &text, lang);
+    let _ = app.emit(events::HISTORY_CHANGED, ());
+    Ok(text)
+}

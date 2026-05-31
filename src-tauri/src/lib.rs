@@ -1,14 +1,134 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
+//! VOXCTL Tauri app builder. Keeps `main.rs` minimal; this owns plugin
+//! registration, the menu-bar tray, and the command surface.
+
+mod audio_pipeline;
+mod commands;
+mod events;
+mod history;
+mod hud;
+mod platform;
+mod resample;
+mod shortcut;
+mod transcription;
+
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Manager,
+};
+
+use commands::audio::RecorderState;
+
+/// Bring the main dashboard window to the foreground (used by the tray).
+fn show_main(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
+}
+
+fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "Show VOXCTL", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit VOXCTL", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .expect("default window icon is bundled");
+
+    TrayIconBuilder::with_id("main")
+        .icon(icon)
+        .tooltip("VOXCTL")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => show_main(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main(tray.app_handle());
+            }
+        })
+        .build(app)?;
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let _ = env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("info,voxctlcom=debug"),
+    )
+    .try_init();
+
+    // rustls 0.23 requires a process-wide crypto provider before any TLS
+    // (the realtime WebSocket). Install ring once.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_notification::init())
+        .manage(RecorderState::default())
+        .manage(commands::modes::ActiveModeState::default())
+        .setup(|app| {
+            app.manage(history::init(app.handle())?);
+            setup_tray(app.handle())?;
+            shortcut::apply_shortcut(app.handle());
+
+            // Auto-switch the active Mode as the frontmost app changes.
+            let handle = app.handle().clone();
+            platform::macos::observe_app_switches(move || {
+                commands::modes::refresh_active_mode(&handle);
+            });
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Keep VOXCTL alive in the menu bar when the dashboard is closed;
+            // it stays reachable from the tray (brief: "sits in the menu bar all
+            // day"). Use the tray's Quit to actually exit.
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::config::get_config,
+            commands::config::reload_config,
+            commands::config::has_api_key,
+            commands::config::set_api_key,
+            commands::config::delete_api_key,
+            commands::modes::list_modes,
+            commands::modes::save_mode,
+            commands::modes::delete_mode,
+            commands::modes::set_mode_enabled,
+            commands::modes::get_active_mode,
+            commands::audio::start_recording,
+            commands::audio::stop_recording,
+            commands::audio::set_recording_language,
+            commands::permissions::get_permissions,
+            commands::permissions::request_microphone,
+            commands::permissions::request_accessibility,
+            commands::permissions::open_permission_settings,
+            commands::history::list_history,
+            commands::history::delete_recording,
+            commands::history::toggle_favorite,
+            commands::history::increment_copy,
+            commands::history::read_audio,
+            commands::transcription::retranscribe,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
