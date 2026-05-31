@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Shown in the macOS microphone permission prompt (TCC). Required, or the
+       app crashes on first mic access. Merged into the generated Info.plist. -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>VOXCTL captures your voice to transcribe speech into the focused app.</string>
+</dict>
+</plist>

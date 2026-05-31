@@ -1,8 +1,8 @@
 [package]
 name = "voxctlcom"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "VOXCTL — fast macOS voice-to-text"
+authors = ["Derick Ruiz"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -18,8 +18,44 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-opener = "2"
+tauri-plugin-store = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+log = "0.4"
+env_logger = "0.11"
 
+# Secure storage of the OpenAI key in the macOS Keychain (never plaintext).
+keyring = { version = "3", features = ["apple-native"] }
+
+# Native microphone capture (CoreAudio on macOS) — stream only opens while recording.
+cpal = "0.15"
+
+# Realtime transcription: WebSocket (rustls, no OpenSSL) + resample + base64.
+tokio = { version = "1", features = ["sync", "time", "macros", "rt"] }
+tokio-tungstenite = { version = "0.24", features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+base64 = "0.22"
+rubato = "0.15"
+async-trait = "0.1"
+# rustls 0.23 needs an explicitly installed crypto provider; pin ring to match
+# what tokio-tungstenite pulls and install it at startup.
+rustls = { version = "0.23", features = ["ring"] }
+
+# macOS injection + permissions (aligned with the objc2 versions tauri pulls).
+core-graphics = "0.24"
+core-foundation = "0.9"
+accessibility-sys = "0.1"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSNotification", "NSOperation", "block2"] }
+objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication", "NSSound"] }
+objc2-av-foundation = { version = "0.3", features = ["AVCaptureDevice", "AVMediaFormat"] }
+block2 = "0.6"
+
+# History persistence: SQLite metadata index + WAV files on disk.
+rusqlite = { version = "0.32", features = ["bundled"] }
+hound = "3"

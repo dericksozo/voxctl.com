@@ -17,6 +17,9 @@ dist-ssr
 !.vscode/extensions.json
 .idea
 .DS_Store
+
+# Local-only build brief / scratch docs
+BRIEF.md
 *.suo
 *.ntvs*
 *.njsproj
