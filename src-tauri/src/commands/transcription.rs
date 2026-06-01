@@ -25,8 +25,9 @@ pub async fn retranscribe(
         .transcribe(&pcm16, language.as_deref(), &on_delta)
         .await?;
 
-    let lang = language.as_deref().unwrap_or("auto");
-    history::update_transcript(&app.state::<HistoryDb>(), id, &text, lang);
+    // Same "auto" → detected-language resolution as the live recording path.
+    let lang = crate::lang_detect::resolve(language.as_deref(), &text);
+    history::update_transcript(&app.state::<HistoryDb>(), id, &text, &lang);
     let _ = app.emit(events::HISTORY_CHANGED, ());
     Ok(text)
 }

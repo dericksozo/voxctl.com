@@ -125,13 +125,15 @@ fn finalize(app: &AppHandle, pcm16: &[i16], transcript: &str, ctx: &RecordingCon
     }
 
     // Always save (even empty transcript / on failure) so nothing is lost.
-    let language = ctx.language.as_deref().unwrap_or("auto");
+    // For "auto" recordings, resolve the actual detected language so the history
+    // chip shows e.g. "en"/"ja" rather than the literal "auto" selection label.
+    let language = crate::lang_detect::resolve(ctx.language.as_deref(), transcript);
     let mode_name = ctx.mode_name.as_deref().unwrap_or("—");
     match history::save(
         app,
         pcm16,
         transcript,
-        language,
+        &language,
         mode_name,
         ctx.app_name.as_deref(),
         ctx.website.as_deref(),

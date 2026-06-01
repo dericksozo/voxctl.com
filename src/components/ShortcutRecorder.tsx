@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { t } from "../i18n";
 
 // Builds an accelerator string understood by tauri-plugin-global-shortcut, e.g.
@@ -31,7 +31,7 @@ function mainKeyFromCode(code: string): string | null {
   return map[code] ?? null;
 }
 
-function accelFromEvent(e: React.KeyboardEvent): string | null {
+function accelFromEvent(e: KeyboardEvent): string | null {
   const main = mainKeyFromCode(e.code);
   if (!main) return null; // modifier-only press: keep waiting
   const parts: string[] = [];
@@ -54,26 +54,49 @@ export function prettyAccel(accel: string): string {
 
 export function ShortcutRecorder({ value, onChange }: { value: string; onChange: (accel: string) => void }) {
   const [recording, setRecording] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+
+  // While capturing, listen on the window (capture phase) instead of relying on
+  // the button's own onKeyDown. macOS WKWebView does NOT focus a <button> on
+  // click, so an element-level key handler never fires there — a window listener
+  // is the robust way to read the next chord. The capture phase + stopPropagation
+  // also keeps the keypress from triggering the app's j/k/arrow nav shortcuts.
+  useEffect(() => {
+    if (!recording) return;
+
+    function onKeyDown(e: KeyboardEvent) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        setRecording(false);
+        return;
+      }
+      const accel = accelFromEvent(e);
+      if (accel) {
+        onChange(accel);
+        setRecording(false);
+      }
+      // modifier-only press: keep waiting for a full chord
+    }
+    // Clicking anywhere outside the button cancels capture.
+    function onPointerDown(e: PointerEvent) {
+      if (!btnRef.current?.contains(e.target as Node)) setRecording(false);
+    }
+
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("pointerdown", onPointerDown, true);
+    };
+  }, [recording, onChange]);
 
   return (
     <button
+      ref={btnRef}
       type="button"
       className={"kbd" + (recording ? " recording" : "")}
-      onClick={() => setRecording(true)}
-      onBlur={() => setRecording(false)}
-      onKeyDown={(e) => {
-        if (!recording) return;
-        e.preventDefault();
-        if (e.key === "Escape") {
-          setRecording(false);
-          return;
-        }
-        const accel = accelFromEvent(e);
-        if (accel) {
-          onChange(accel);
-          setRecording(false);
-        }
-      }}
+      onClick={() => setRecording((r) => !r)}
     >
       {recording ? t("settings.shortcutRecord") : prettyAccel(value)}
     </button>
