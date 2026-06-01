@@ -1,10 +1,10 @@
 {
   "nav.home": "HOME",
-  "nav.history": "HISTORY",
+  "nav.history": "FILES",
   "nav.modes": "MODES",
   "nav.settings": "SETTINGS",
 
-  "nav.home.meta": "USAGE OVERVIEW",
+  "nav.home.meta": "LIVE DASHBOARD",
   "nav.home.desc": "VOCAL CONTROL DASHBOARD. CYCLE OUTPUT, RECLAIMED TIME AND ACTIVE INTERFACES AT A GLANCE.",
   "nav.history.desc": "TRANSMISSION LOG. PLAY BACK AUDIO, COPY TRANSCRIPTS, FAVORITE, RE-TRANSCRIBE, PURGE ARCHIVES.",
   "nav.modes.desc": "CONTEXT PRESETS. BIND LANGUAGE, KEYWORDS AND TRIGGERS TO APPS AND WEBSITES.",

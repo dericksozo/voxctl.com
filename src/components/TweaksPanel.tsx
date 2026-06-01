@@ -12,13 +12,13 @@ export interface Theme {
 }
 
 export const DEFAULT_THEME: Theme = {
-  pink: "#E5007A",
+  pink: "#F60092",
   scanlines: true,
   grid: true,
   headerFont: "Orbitron",
 };
 
-const PINKS = ["#E5007A", "#FF1744", "#D500F9", "#FF6D00"];
+const PINKS = ["#F60092", "#FF1744", "#D500F9", "#FF6D00"];
 const box: React.CSSProperties = {
   position: "fixed",
   right: 16,

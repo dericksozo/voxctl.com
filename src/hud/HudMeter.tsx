@@ -34,7 +34,7 @@ export function HudMeter() {
       else unlisten = u;
     });
 
-    const pink = getComputedStyle(document.documentElement).getPropertyValue("--pink").trim() || "#e5007a";
+    const pink = getComputedStyle(document.documentElement).getPropertyValue("--pink").trim() || "#f60092";
 
     function draw() {
       if (!ctx) return;
