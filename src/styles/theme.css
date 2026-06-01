@@ -7,7 +7,7 @@
   --gray: #8c949b;
   --line: rgba(22, 25, 29, 0.15);
   --line-soft: rgba(22, 25, 29, 0.07);
-  --pink: #e5007a;
+  --pink: #f60092;
   --mono: "Share Tech Mono", "Space Mono", monospace;
   --head: "Orbitron", sans-serif;
 }
@@ -549,6 +549,16 @@ button.mode-pill {
 }
 .qr i.on {
   background: var(--ink);
+}
+.logo-mark {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: block;
+}
+/* Blink the pink chevron while recording — same cadence as the cursor blink. */
+.logo-mark.recording .logo-pink {
+  animation: blink 1s step-end infinite;
 }
 .app-list li {
   display: grid;

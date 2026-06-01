@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import "./styles/theme.css";
-import { Frame, Qr } from "./components/Primitives";
+import { Frame, Logo, Qr } from "./components/Primitives";
 import { Clock } from "./components/Clock";
 import { VolumeMeter } from "./components/VolumeMeter";
 import { Typewriter } from "./components/Typewriter";
@@ -12,7 +12,7 @@ import { SettingsPanel } from "./panels/SettingsPanel";
 import { useConfig } from "./hooks/useConfig";
 import { useTauriEvent } from "./hooks/useTauriEvent";
 import { t } from "./i18n";
-import { EVT, type BackendError, type ModeChanged } from "./lib/events";
+import { EVT, type BackendError, type ModeChanged, type RecState } from "./lib/events";
 import {
   getActiveMode,
   getPermissions,
@@ -43,6 +43,7 @@ export default function App() {
   const [apiKeySet, setApiKeySet] = useState(false);
   const [perms, setPerms] = useState<PermissionStatus>({ microphone: true, accessibility: true });
   const [toast, setToast] = useState<string | null>(null);
+  const [recording, setRecording] = useState(false);
   const timers = useRef<number[]>([]);
   const toastTimer = useRef<number | undefined>(undefined);
 
@@ -67,6 +68,7 @@ export default function App() {
     refreshPerms();
   }, [refreshModes, refreshHistory, refreshApiKey, refreshPerms]);
 
+  useTauriEvent<RecState>(EVT.recState, (e) => setRecording(e.recording));
   useTauriEvent<ModeChanged>(EVT.modeChanged, () => refreshModes());
   useTauriEvent<unknown>(EVT.historyChanged, () => refreshHistory());
   useTauriEvent<BackendError>(EVT.error, (e) => {
@@ -90,8 +92,8 @@ export default function App() {
   const META: Record<string, string> = {
     home: t("nav.home.meta"),
     history: `${history.length} RECORDINGS · ${minutes} MIN`,
-    modes: `${modes.length} MODES · ▸ ${activeModeName}`,
-    settings: "API · SHORTCUT · SFX · LOCALE",
+    modes: `${modes.length} MODES · CONTEXT-AWARE PRESETS`,
+    settings: "SYSTEM CONFIG",
   };
   const DESC: Record<string, string> = {
     home: t("nav.home.desc"),
@@ -244,7 +246,7 @@ export default function App() {
           </nav>
 
           <div className="side-qr">
-            <Qr seed={1471} n={7} />
+            <Logo recording={recording} />
             <div className="side-qr-txt">
               <span>VX-MENU-0xA7</span>
               <span className="dim">REV 2.4 · {ready ? "READY" : "BOOT"}</span>
