@@ -54,6 +54,17 @@ body {
   background: var(--ink);
   opacity: 0.35;
 }
+.hud.error {
+  border-color: rgba(255, 70, 70, 0.7);
+}
+.hud.error .hud-dot {
+  animation: none;
+  background: #ff4646;
+  opacity: 1;
+}
+.hud.error .hud-text {
+  color: #ff5a5a;
+}
 @keyframes hud-pulse {
   0%,
   100% {

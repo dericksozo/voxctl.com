@@ -32,6 +32,10 @@ env_logger = "0.11"
 # Secure storage of the OpenAI key in the macOS Keychain (never plaintext).
 keyring = { version = "3", features = ["apple-native"] }
 
+# Lightweight HTTPS for the zero-token API-key validation (GET /v1/models).
+# rustls only (no OpenSSL), reusing the existing TLS stack.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
 # Native microphone capture (CoreAudio on macOS) — stream only opens while recording.
 cpal = "0.15"
 
@@ -49,10 +53,11 @@ rustls = { version = "0.23", features = ["ring"] }
 # macOS injection + permissions (aligned with the objc2 versions tauri pulls).
 core-graphics = "0.24"
 core-foundation = "0.9"
+core-foundation-sys = "0.8"
 accessibility-sys = "0.1"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSNotification", "NSOperation", "block2"] }
-objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication", "NSSound"] }
+objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication", "NSSound", "NSApplication", "NSResponder"] }
 objc2-av-foundation = { version = "0.3", features = ["AVCaptureDevice", "AVMediaFormat"] }
 block2 = "0.6"
 

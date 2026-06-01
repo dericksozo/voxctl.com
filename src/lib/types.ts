@@ -23,7 +23,7 @@ export const DEFAULT_CONFIG: Config = {
   shortcut: "Alt+Space",
   sfxEnabled: true,
   copyToClipboard: false,
-  notifyOnModeSwitch: true,
+  notifyOnModeSwitch: false,
   appLocale: "en",
   defaultLanguage: null,
 };

@@ -5,20 +5,31 @@ import { useConfig } from "../hooks/useConfig";
 import { t } from "../i18n";
 import { AVAILABLE_LOCALES } from "../i18n";
 import { LANGUAGES } from "../lib/languages";
-import { setApiKey, deleteApiKey } from "../lib/ipc";
-import type { CaptureMode } from "../lib/types";
+import {
+  setApiKey,
+  deleteApiKey,
+  openPermissionSettings,
+  requestAccessibility,
+  requestMicrophone,
+  requestNotificationPermission,
+} from "../lib/ipc";
+import type { CaptureMode, PermissionStatus } from "../lib/types";
 
 export function SettingsPanel({
   apiKeySet,
   refreshApiKey,
+  perms,
+  refreshPerms,
 }: {
   apiKeySet: boolean;
   refreshApiKey: () => void;
+  perms: PermissionStatus;
+  refreshPerms: () => void;
 }) {
   const { config, set } = useConfig();
   const [keyDraft, setKeyDraft] = useState("");
-  const [reveal, setReveal] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [keyErr, setKeyErr] = useState<string | null>(null);
 
   // Reflect stored state without ever pulling the secret into the webview.
   useEffect(() => {
@@ -28,8 +39,10 @@ export function SettingsPanel({
   async function saveKey() {
     const k = keyDraft.trim();
     setSaving(true);
+    setKeyErr(null);
     try {
       if (k) {
+        // Validated against OpenAI in Rust; an invalid key is rejected (not stored).
         await setApiKey(k);
       } else {
         await deleteApiKey();
@@ -37,14 +50,63 @@ export function SettingsPanel({
       setKeyDraft("");
       refreshApiKey();
     } catch (e) {
-      console.error("api key save failed", e);
+      const msg = String(e);
+      setKeyErr(
+        msg.includes("invalid")
+          ? t("settings.keyInvalid")
+          : msg.includes("unreachable")
+            ? t("settings.keyUnreachable")
+            : t("settings.keyError"),
+      );
     } finally {
       setSaving(false);
     }
   }
 
+  const permsMissing = !perms.microphone || !perms.accessibility;
+
+  // Notifications are OFF by default. Turning them ON triggers the macOS
+  // permission prompt; only persist ON if the user actually grants it.
+  async function toggleNotify() {
+    if (config.notifyOnModeSwitch) {
+      set("notifyOnModeSwitch", false);
+      return;
+    }
+    const granted = await requestNotificationPermission().catch(() => false);
+    set("notifyOnModeSwitch", granted);
+  }
+
   return (
     <div className="panel-body settings">
+      {permsMissing ? (
+        <div className="set-row">
+          <div className="set-label">
+            {t("perm.title")} <span className="set-sub">{t("perm.banner")}</span>
+          </div>
+          <div className="perm-cards">
+            <PermCard
+              name={t("perm.mic.name")}
+              desc={t("perm.mic.desc")}
+              granted={perms.microphone}
+              onAction={() => requestMicrophone().then(refreshPerms).catch(() => {})}
+              onOpen={() => openPermissionSettings("microphone").catch(() => {})}
+            />
+            <PermCard
+              name={t("perm.ax.name")}
+              desc={t("perm.ax.desc")}
+              granted={perms.accessibility}
+              onAction={() => requestAccessibility().then(refreshPerms).catch(() => {})}
+              onOpen={() => openPermissionSettings("accessibility").catch(() => {})}
+            />
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+            <button type="button" className="pc-btn secondary" onClick={refreshPerms}>
+              ↻ {t("perm.recheck")}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <div className="set-row">
         <div className="set-label">
           {t("settings.apiKey")} <span className="set-sub">{t("settings.byok")}</span>
@@ -53,19 +115,19 @@ export function SettingsPanel({
           <input
             className="key-input"
             value={keyDraft}
-            onChange={(e) => setKeyDraft(e.target.value)}
-            type={reveal ? "text" : "password"}
+            onChange={(e) => {
+              setKeyDraft(e.target.value);
+              if (keyErr) setKeyErr(null);
+            }}
+            type="password"
             spellCheck={false}
             placeholder={apiKeySet ? "•••••••••••••••• (stored)" : "sk-…"}
           />
-          <button type="button" className="key-eye" onClick={() => setReveal((r) => !r)}>
-            {reveal ? t("settings.hide") : t("settings.show")}
-          </button>
           <button type="button" className="key-eye" onClick={saveKey} disabled={saving}>
-            {t("settings.save")}
+            {saving ? t("settings.validating") : t("settings.save")}
           </button>
-          <span className={"set-ok" + (apiKeySet ? "" : " bad")}>
-            {apiKeySet ? "✓ " + t("settings.valid") : t("settings.invalid")}
+          <span className={"set-ok" + (keyErr ? " bad" : apiKeySet ? "" : " bad")}>
+            {keyErr ? "✕ " + keyErr : apiKeySet ? "✓ " + t("settings.valid") : t("settings.invalid")}
           </span>
         </div>
         <div className="set-hint">{t("settings.keyHint")}</div>
@@ -149,9 +211,47 @@ export function SettingsPanel({
         </div>
         <Toggle
           on={config.notifyOnModeSwitch}
-          onToggle={() => set("notifyOnModeSwitch", !config.notifyOnModeSwitch)}
+          onToggle={toggleNotify}
           labels={[t("settings.on"), t("settings.off")]}
         />
+      </div>
+    </div>
+  );
+}
+
+function PermCard({
+  name,
+  desc,
+  granted,
+  onAction,
+  onOpen,
+}: {
+  name: string;
+  desc: string;
+  granted: boolean;
+  onAction: () => void;
+  onOpen: () => void;
+}) {
+  return (
+    <div className="perm-card">
+      <div className="pc-main">
+        <div className="pc-name">
+          {name}
+          <span className={"pc-status " + (granted ? "granted" : "denied")}>
+            {granted ? t("perm.granted") : t("perm.denied")}
+          </span>
+        </div>
+        <div className="pc-desc">{desc}</div>
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button type="button" className="pc-btn secondary" onClick={onOpen}>
+          {t("perm.open")}
+        </button>
+        {granted ? null : (
+          <button type="button" className="pc-btn" onClick={onAction}>
+            {t("perm.grant")}
+          </button>
+        )}
       </div>
     </div>
   );

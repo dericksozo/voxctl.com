@@ -19,8 +19,12 @@ use tauri::{
 
 use commands::audio::RecorderState;
 
-/// Bring the main dashboard window to the foreground (used by the tray).
+/// Bring the main dashboard window to the foreground (used by the tray and the
+/// Dock re-open). The window is only hidden (not destroyed) when its close
+/// button is clicked, so we re-show it and activate the app so it comes to
+/// front — `show()`/`set_focus()` alone don't re-activate a backgrounded app.
 fn show_main(app: &tauri::AppHandle) {
+    platform::macos::activate_app();
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.unminimize();
@@ -85,6 +89,9 @@ pub fn run() {
             app.manage(history::init(app.handle())?);
             setup_tray(app.handle())?;
             shortcut::apply_shortcut(app.handle());
+            // Build the recording HUD up front (hidden) so the first record just
+            // shows it — building it lazily during recording stole focus.
+            hud::ensure_hud(app.handle());
 
             // Auto-switch the active Mode as the frontmost app changes.
             let handle = app.handle().clone();
@@ -121,6 +128,7 @@ pub fn run() {
             commands::permissions::get_permissions,
             commands::permissions::request_microphone,
             commands::permissions::request_accessibility,
+            commands::permissions::request_notification_permission,
             commands::permissions::open_permission_settings,
             commands::history::list_history,
             commands::history::delete_recording,
@@ -129,6 +137,13 @@ pub fn run() {
             commands::history::read_audio,
             commands::transcription::retranscribe,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Clicking the Dock icon when no window is visible (macOS) re-opens
+            // the dashboard — same as the tray's Show.
+            if let tauri::RunEvent::Reopen { .. } = event {
+                show_main(app);
+            }
+        });
 }

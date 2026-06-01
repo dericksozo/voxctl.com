@@ -25,13 +25,8 @@ fn position(app: &AppHandle, win: &tauri::WebviewWindow) {
     }
 }
 
-pub fn show_hud(app: &AppHandle) {
-    if let Some(win) = app.get_webview_window(LABEL) {
-        position(app, &win);
-        let _ = win.show();
-        return;
-    }
-    match WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("hud.html".into()))
+fn build_hud(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> {
+    WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("hud.html".into()))
         .title("VOXCTL REC")
         .inner_size(W, H)
         .decorations(false)
@@ -43,13 +38,35 @@ pub fn show_hud(app: &AppHandle) {
         .focused(false)
         .visible(false)
         .build()
-    {
-        Ok(win) => {
-            position(app, &win);
-            let _ = win.show();
-        }
-        Err(e) => log::error!("failed to build HUD window: {e}"),
+}
+
+/// Pre-build the HUD (hidden) at startup. Building a window activates the app and
+/// would steal focus from the user's text field — so we do it once up front,
+/// while the dashboard is already frontmost, instead of on the first recording.
+pub fn ensure_hud(app: &AppHandle) {
+    if app.get_webview_window(LABEL).is_some() {
+        return;
     }
+    if let Err(e) = build_hud(app) {
+        log::error!("failed to pre-build HUD window: {e}");
+    }
+}
+
+pub fn show_hud(app: &AppHandle) {
+    let win = match app.get_webview_window(LABEL) {
+        Some(win) => win,
+        None => match build_hud(app) {
+            Ok(win) => win,
+            Err(e) => {
+                log::error!("failed to build HUD window: {e}");
+                return;
+            }
+        },
+    };
+    position(app, &win);
+    // Order it in WITHOUT focusing, so the user's frontmost text field keeps key
+    // focus (critical for injection). We never call set_focus on the HUD.
+    let _ = win.show();
 }
 
 pub fn hide_hud(app: &AppHandle) {

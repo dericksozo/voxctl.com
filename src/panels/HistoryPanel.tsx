@@ -153,6 +153,9 @@ export function HistoryPanel({ history, onChange }: { history: HistoryItem[]; on
                     {item.favorite ? <span className="mode-badge">★</span> : null}
                   </div>
                   <div style={{ display: "flex", gap: 6 }}>
+                    {item.modeName && item.modeName !== "—" ? (
+                      <span className="file-chip mode">▸ {item.modeName.toUpperCase()}</span>
+                    ) : null}
                     {ctx ? <span className="file-chip ctx">{ctx.toUpperCase()}</span> : null}
                     <span className="file-chip">{langLabel(item.language)}</span>
                   </div>

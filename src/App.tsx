@@ -9,7 +9,6 @@ import { HomePanel } from "./panels/HomePanel";
 import { HistoryPanel } from "./panels/HistoryPanel";
 import { ModesPanel } from "./panels/ModesPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
-import { OnboardingPanel } from "./panels/OnboardingPanel";
 import { useConfig } from "./hooks/useConfig";
 import { useTauriEvent } from "./hooks/useTauriEvent";
 import { t } from "./i18n";
@@ -20,9 +19,6 @@ import {
   hasApiKey,
   listHistory,
   listModes,
-  openPermissionSettings,
-  requestAccessibility,
-  requestMicrophone,
 } from "./lib/ipc";
 import type { HistoryItem, Mode, PermissionStatus } from "./lib/types";
 
@@ -74,6 +70,9 @@ export default function App() {
   useTauriEvent<ModeChanged>(EVT.modeChanged, () => refreshModes());
   useTauriEvent<unknown>(EVT.historyChanged, () => refreshHistory());
   useTauriEvent<BackendError>(EVT.error, (e) => {
+    // Recording-flow failures (transcription / injection) are shown quietly in
+    // the HUD — don't also pop an intrusive dashboard toast for them.
+    if (e.stage === "transcription" || e.stage === "inject") return;
     setToast(e.message);
     window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToast(null), 6000);
@@ -99,7 +98,6 @@ export default function App() {
     history: t("nav.history.desc"),
     modes: t("nav.modes.desc"),
     settings: t("nav.settings.desc"),
-    onboard: t("perm.banner"),
   };
 
   const switchTo = useCallback(
@@ -141,6 +139,20 @@ export default function App() {
 
   const permsMissing = !perms.microphone || !perms.accessibility;
 
+  // Auto-refresh permission status so grants made in System Settings appear
+  // without a manual re-check or app restart. Poll while something is missing,
+  // and always re-check when the window regains focus.
+  useEffect(() => {
+    const onFocus = () => refreshPerms();
+    window.addEventListener("focus", onFocus);
+    let id: number | undefined;
+    if (permsMissing) id = window.setInterval(refreshPerms, 1500);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      if (id !== undefined) window.clearInterval(id);
+    };
+  }, [permsMissing, refreshPerms]);
+
   function renderPanel() {
     switch (view) {
       case "home":
@@ -150,15 +162,12 @@ export default function App() {
       case "modes":
         return <ModesPanel modes={modes} activeModeId={activeMode?.id ?? null} onChange={refreshModes} />;
       case "settings":
-        return <SettingsPanel apiKeySet={apiKeySet} refreshApiKey={refreshApiKey} />;
-      case "onboard":
         return (
-          <OnboardingPanel
-            permissions={perms}
-            onRecheck={refreshPerms}
-            onRequestMic={() => requestMicrophone().then(refreshPerms).catch(() => {})}
-            onRequestAccessibility={() => requestAccessibility().then(refreshPerms).catch(() => {})}
-            onOpen={(w) => openPermissionSettings(w).catch(() => {})}
+          <SettingsPanel
+            apiKeySet={apiKeySet}
+            refreshApiKey={refreshApiKey}
+            perms={perms}
+            refreshPerms={refreshPerms}
           />
         );
       default:
@@ -166,7 +175,7 @@ export default function App() {
     }
   }
 
-  const labelText = view === "onboard" ? "// PERMISSIONS" : "// " + (MENU.find((m) => m.id === view)?.label ?? "");
+  const labelText = "// " + (MENU.find((m) => m.id === view)?.label ?? "");
   const frameCls = "content-frame " + (phase === "closing" ? "closing" : phase === "opening" ? "opening" : "");
 
   return (
@@ -185,9 +194,15 @@ export default function App() {
           <span className="trace-dot" />
         </div>
         <div className="head-right">
-          <div className="mode-pill">
-            {t("header.activeMode")} <b>▸ {activeModeName}</b>
-          </div>
+          {permsMissing ? (
+            <button type="button" className="mode-pill warn" onClick={() => switchTo("settings")}>
+              {t("perm.title")}
+            </button>
+          ) : (
+            <div className="mode-pill">
+              {t("header.activeMode")} <b>▸ {activeModeName}</b>
+            </div>
+          )}
           <div className="head-stat">
             {t("header.link")}{" "}
             <span className={perms.accessibility ? "ok" : "bad"}>
@@ -203,16 +218,6 @@ export default function App() {
 
       <main className="main">
         <div className="side">
-          {permsMissing ? (
-            <div className="perm-banner">
-              <span className="pb-text">
-                <b>{t("perm.title")}</b> — {t("perm.banner")}
-              </span>
-              <button type="button" className="pc-btn" onClick={() => switchTo("onboard")}>
-                {t("perm.review")}
-              </button>
-            </div>
-          ) : null}
           <nav className="nav">
             <div className="nav-label">{t("common.select")}</div>
             <ul className="nav-list">

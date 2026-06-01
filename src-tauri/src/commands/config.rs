@@ -31,7 +31,7 @@ impl Default for Config {
             shortcut: "Alt+Space".into(),
             sfx_enabled: true,
             copy_to_clipboard: false,
-            notify_on_mode_switch: true,
+            notify_on_mode_switch: false,
             app_locale: "en".into(),
             default_language: None,
         }
@@ -68,16 +68,44 @@ fn entry() -> Result<keyring::Entry, String> {
 
 #[tauri::command]
 pub fn has_api_key() -> bool {
-    entry().and_then(|e| e.get_password().map_err(|x| x.to_string())).is_ok()
+    entry()
+        .and_then(|e| e.get_password().map_err(|x| x.to_string()))
+        .is_ok()
 }
 
+/// Validate a key against OpenAI with a zero-token request (`GET /v1/models`).
+/// 2xx => valid; 401/403 => "invalid"; anything else/network => "unreachable".
+async fn validate_api_key(key: &str) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("unreachable: {e}"))?;
+    let resp = client
+        .get("https://api.openai.com/v1/models")
+        .bearer_auth(key)
+        .send()
+        .await
+        .map_err(|e| format!("unreachable: {e}"))?;
+    let status = resp.status();
+    if status.is_success() {
+        Ok(())
+    } else if status.as_u16() == 401 || status.as_u16() == 403 {
+        Err("invalid".into())
+    } else {
+        Err(format!("unreachable: unexpected status {status}"))
+    }
+}
+
+/// Validate the key against OpenAI, then store it in the Keychain ONLY if valid
+/// (per product decision: reject invalid keys rather than storing them).
 #[tauri::command]
-pub fn set_api_key(key: String) -> Result<(), String> {
-    let key = key.trim();
+pub async fn set_api_key(key: String) -> Result<(), String> {
+    let key = key.trim().to_string();
     if key.is_empty() {
         return Err("empty key".into());
     }
-    entry()?.set_password(key).map_err(|e| e.to_string())
+    validate_api_key(&key).await?;
+    entry()?.set_password(&key).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

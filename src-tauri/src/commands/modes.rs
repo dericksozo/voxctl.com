@@ -217,13 +217,20 @@ pub fn refresh_active_mode(app: &AppHandle) {
 
     if let Some(name) = new_name {
         if load_config(app).notify_on_mode_switch {
-            use tauri_plugin_notification::NotificationExt;
-            let _ = app
-                .notification()
-                .builder()
-                .title("VOXCTL")
-                .body(format!("Switched to {name} mode"))
-                .show();
+            use tauri_plugin_notification::{NotificationExt, PermissionState};
+            // Only show if the user actually granted notification permission
+            // (enabling the toggle prompts for it); otherwise this is a silent no-op.
+            if matches!(
+                app.notification().permission_state(),
+                Ok(PermissionState::Granted)
+            ) {
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("VOXCTL")
+                    .body(format!("Switched to {name} mode"))
+                    .show();
+            }
         }
     }
 }

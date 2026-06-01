@@ -13,9 +13,11 @@ use std::time::Duration;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
 use tauri::{AppHandle, Emitter, Manager};
+use tokio::sync::mpsc::UnboundedSender;
 
 use crate::events::{self, MicLevel, RecState};
 use crate::hud;
+use crate::transcription::{OpenAiRealtimeTranscriber, RealtimeSession};
 
 /// A live capture: shared buffers + the thread that owns the cpal stream.
 pub struct Capture {
@@ -43,6 +45,9 @@ pub struct RecorderInner {
     /// Resolved context for the in-flight recording.
     pub current_ctx: RecordingContext,
     pub recording: bool,
+    /// Live transcription session for the in-flight recording (None when there's
+    /// no API key — the recording is still captured and saved, transcribed on stop).
+    pub session: Option<RealtimeSession>,
 }
 
 #[derive(Default)]
@@ -90,7 +95,10 @@ fn downmix<T: Copy>(data: &[T], channels: usize, to_f32: impl Fn(T) -> f32) -> V
     out
 }
 
-fn start_capture(app: &AppHandle) -> Result<Capture, String> {
+fn start_capture(
+    app: &AppHandle,
+    raw_tx: Option<UnboundedSender<Vec<f32>>>,
+) -> Result<Capture, String> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -116,6 +124,9 @@ fn start_capture(app: &AppHandle) -> Result<Capture, String> {
         let err_fn = |e| log::error!("audio stream error: {e}");
         let cb_samples = samples_t.clone();
         let cb_level = level_t.clone();
+        // Forward raw mono blocks to the live-transcription resampler (if any).
+        // The send is non-blocking, so the audio callback stays cheap.
+        let cb_raw_tx = raw_tx;
 
         let stream_res = match sample_format {
             SampleFormat::F32 => device.build_input_stream(
@@ -123,6 +134,9 @@ fn start_capture(app: &AppHandle) -> Result<Capture, String> {
                 move |data: &[f32], _| {
                     let mono = downmix(data, channels, |s| s);
                     process_block(&mono, &cb_samples, &cb_level);
+                    if let Some(tx) = &cb_raw_tx {
+                        let _ = tx.send(mono);
+                    }
                 },
                 err_fn,
                 None,
@@ -132,6 +146,9 @@ fn start_capture(app: &AppHandle) -> Result<Capture, String> {
                 move |data: &[i16], _| {
                     let mono = downmix(data, channels, |s| s as f32 / 32768.0);
                     process_block(&mono, &cb_samples, &cb_level);
+                    if let Some(tx) = &cb_raw_tx {
+                        let _ = tx.send(mono);
+                    }
                 },
                 err_fn,
                 None,
@@ -141,6 +158,9 @@ fn start_capture(app: &AppHandle) -> Result<Capture, String> {
                 move |data: &[u16], _| {
                     let mono = downmix(data, channels, |s| (s as f32 - 32768.0) / 32768.0);
                     process_block(&mono, &cb_samples, &cb_level);
+                    if let Some(tx) = &cb_raw_tx {
+                        let _ = tx.send(mono);
+                    }
                 },
                 err_fn,
                 None,
@@ -208,12 +228,61 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
     let ctx = crate::commands::modes::resolve_context(app, override_lang);
     let language = ctx.language.clone();
 
-    let cap = start_capture(app)?;
+    // Open a live transcription session (when a key exists) so audio streams to
+    // OpenAI WHILE recording — the transcript is essentially ready on stop. The
+    // captured audio is still buffered for the WAV regardless of streaming.
+    let session_bits = match crate::commands::config::get_api_key() {
+        Some(key) => {
+            let app_delta = app.clone();
+            let session = OpenAiRealtimeTranscriber::open_session(
+                key,
+                language.clone(),
+                move |text: String| {
+                    let _ =
+                        app_delta.emit(events::TRANSCRIPT_PARTIAL, events::TranscriptText { text });
+                },
+            );
+            let pcm_tx = session.sender();
+            let (raw_tx, raw_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
+            Some((session, raw_tx, raw_rx, pcm_tx))
+        }
+        None => None,
+    };
+
+    let capture_raw_tx = session_bits
+        .as_ref()
+        .map(|(_, raw_tx, _, _)| raw_tx.clone());
+    let cap = start_capture(app, capture_raw_tx)?;
+    let input_rate = cap.sample_rate;
+
+    let session = session_bits.map(|(session, raw_tx, raw_rx, pcm_tx)| {
+        // The capture thread holds the live sender; drop ours so `raw_rx` closes
+        // when capture stops. The forwarder resamples f32 → 24 kHz PCM16 and
+        // streams it to the session, flushing the tail before dropping `pcm_tx`.
+        drop(raw_tx);
+        let mut raw_rx = raw_rx;
+        tauri::async_runtime::spawn(async move {
+            let mut rs = crate::resample::StreamResampler::new(input_rate);
+            while let Some(block) = raw_rx.recv().await {
+                let pcm = rs.push(&block);
+                if !pcm.is_empty() {
+                    let _ = pcm_tx.send(pcm);
+                }
+            }
+            let tail = rs.finish();
+            if !tail.is_empty() {
+                let _ = pcm_tx.send(tail);
+            }
+        });
+        session
+    });
+
     {
         let mut inner = state.0.lock().unwrap();
         inner.active = Some(cap);
         inner.current_ctx = ctx;
         inner.recording = true;
+        inner.session = session;
     }
     hud::show_hud(app);
     play_sfx(app, true);
@@ -230,13 +299,17 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
 
 pub fn stop(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<RecorderState>();
-    let (cap, ctx) = {
+    let (cap, ctx, session) = {
         let mut inner = state.0.lock().unwrap();
         if !inner.recording {
             return Ok(());
         }
         inner.recording = false;
-        (inner.active.take(), inner.current_ctx.clone())
+        (
+            inner.active.take(),
+            inner.current_ctx.clone(),
+            inner.session.take(),
+        )
     };
 
     play_sfx(app, false);
@@ -252,6 +325,8 @@ pub fn stop(app: &AppHandle) -> Result<(), String> {
 
     match cap {
         Some(cap) => {
+            // Joining the capture thread drops the audio sender, which closes the
+            // forwarder so the live session can commit.
             let (samples, rate) = finish_capture(cap);
             let secs = samples.len() as f32 / rate.max(1) as f32;
             log::info!(
@@ -261,12 +336,16 @@ pub fn stop(app: &AppHandle) -> Result<(), String> {
                 secs
             );
             if samples.is_empty() {
+                drop(session); // nothing to transcribe; let the session task wind down
                 hud::hide_hud(app);
             } else {
-                crate::audio_pipeline::on_recording_finished(app, samples, rate, ctx);
+                crate::audio_pipeline::on_recording_finished(app, samples, rate, ctx, session);
             }
         }
-        None => hud::hide_hud(app),
+        None => {
+            drop(session);
+            hud::hide_hud(app);
+        }
     }
     Ok(())
 }
