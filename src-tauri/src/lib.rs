@@ -6,6 +6,7 @@ mod commands;
 mod events;
 mod history;
 mod hud;
+mod lang_detect;
 mod platform;
 mod resample;
 mod shortcut;
