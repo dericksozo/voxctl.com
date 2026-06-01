@@ -53,9 +53,14 @@ fn frontmost_pid() -> Option<i32> {
     Some(app.processIdentifier())
 }
 
-/// Best-effort URL of the focused browser tab via the Accessibility API. Reads
-/// `AXURL` from the focused UI element. Returns None for non-browsers or when
-/// the element doesn't expose a URL — website matching degrades to app-only.
+/// Best-effort URL of the focused browser tab via the Accessibility API.
+///
+/// Browsers (Chrome/Safari/Arc/Edge/Brave) don't expose `AXURL` on the focused
+/// text field — it lives on the `AXWebArea` inside the window. So we first try
+/// the focused element (some apps expose it there), then walk the focused
+/// window's element tree to find the first element with an `AXURL`. Returns None
+/// for non-browsers or when no URL is found — website matching degrades to
+/// app-only. Uses only the already-granted Accessibility API (no new prompt).
 pub fn focused_url() -> Option<String> {
     use accessibility_sys::{
         kAXErrorSuccess, AXUIElementCopyAttributeValue, AXUIElementCreateApplication,
@@ -64,6 +69,10 @@ pub fn focused_url() -> Option<String> {
     use core_foundation::base::{CFGetTypeID, CFRelease, CFTypeRef, TCFType};
     use core_foundation::string::{CFString, CFStringRef};
     use core_foundation::url::{CFURLRef, CFURL};
+    use core_foundation_sys::array::{
+        CFArrayGetCount, CFArrayGetTypeID, CFArrayGetValueAtIndex, CFArrayRef,
+    };
+    use core_foundation_sys::base::CFRetain;
 
     if !accessibility_trusted() {
         return None;
@@ -94,6 +103,47 @@ pub fn focused_url() -> Option<String> {
         }
     }
 
+    /// Bounded breadth-first search for the first element exposing `AXURL`
+    /// (the `AXWebArea` in browsers). We hold a retain on every queued element
+    /// and release it after processing, so nothing leaks even when we stop early.
+    unsafe fn find_url_in_tree(root: AXUIElementRef) -> Option<String> {
+        use std::collections::VecDeque;
+        const MAX_VISITS: usize = 1500;
+
+        let mut queue: VecDeque<AXUIElementRef> = VecDeque::new();
+        CFRetain(root as CFTypeRef);
+        queue.push_back(root);
+
+        let mut found = None;
+        let mut visited = 0usize;
+        while let Some(el) = queue.pop_front() {
+            if found.is_none() {
+                visited += 1;
+                if let Some(url_val) = copy_attr(el, "AXURL") {
+                    found = url_string(url_val);
+                }
+                if found.is_none() && visited < MAX_VISITS {
+                    if let Some(kids) = copy_attr(el, "AXChildren") {
+                        if CFGetTypeID(kids) == CFArrayGetTypeID() {
+                            let arr = kids as CFArrayRef;
+                            let n = CFArrayGetCount(arr);
+                            for i in 0..n {
+                                let child = CFArrayGetValueAtIndex(arr, i) as AXUIElementRef;
+                                if !child.is_null() {
+                                    CFRetain(child as CFTypeRef);
+                                    queue.push_back(child);
+                                }
+                            }
+                        }
+                        CFRelease(kids);
+                    }
+                }
+            }
+            CFRelease(el as CFTypeRef);
+        }
+        found
+    }
+
     unsafe {
         let pid = frontmost_pid()?;
         let app_el = AXUIElementCreateApplication(pid);
@@ -102,15 +152,44 @@ pub fn focused_url() -> Option<String> {
         }
 
         let mut result = None;
+
+        // Fast path: some apps expose AXURL right on the focused element.
         if let Some(focused) = copy_attr(app_el, "AXFocusedUIElement") {
             if let Some(url_val) = copy_attr(focused as AXUIElementRef, "AXURL") {
                 result = url_string(url_val);
             }
             CFRelease(focused);
         }
+
+        // Browser fallback: walk the focused/main window for the AXWebArea URL.
+        if result.is_none() {
+            if let Some(win) =
+                copy_attr(app_el, "AXFocusedWindow").or_else(|| copy_attr(app_el, "AXMainWindow"))
+            {
+                result = find_url_in_tree(win as AXUIElementRef);
+                CFRelease(win);
+            }
+        }
+
         CFRelease(app_el as CFTypeRef);
         result
     }
+}
+
+/// Bring the application to the foreground (activate it), so a window shown from
+/// the tray or a Dock re-open actually comes to front. Must run on the main
+/// thread — tray/Reopen callbacks already do.
+pub fn activate_app() {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    // `activate()` (14+) isn't always enough to pull a backgrounded app forward;
+    // the (deprecated) ignoring-other-apps variant is the reliable cross-version call.
+    #[allow(deprecated)]
+    app.activateIgnoringOtherApps(true);
 }
 
 /// Play a macOS system sound by name (e.g. "Tink", "Pop"). Using the built-in

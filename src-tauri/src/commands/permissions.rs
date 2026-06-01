@@ -40,6 +40,23 @@ pub fn request_accessibility() -> bool {
     macos::prompt_accessibility()
 }
 
+/// Ensure macOS notification permission, prompting once if it hasn't been
+/// decided yet. Called when the user turns ON "auto-switch alerts" in Settings,
+/// so the system prompt is tied to that explicit action (notifications are OFF
+/// by default and never prompt on their own). Returns true if granted.
+#[tauri::command]
+pub fn request_notification_permission(app: AppHandle) -> bool {
+    use tauri_plugin_notification::{NotificationExt, PermissionState};
+    let n = app.notification();
+    let state = n.permission_state().unwrap_or(PermissionState::Prompt);
+    let state = if matches!(state, PermissionState::Granted) {
+        state
+    } else {
+        n.request_permission().unwrap_or(PermissionState::Denied)
+    };
+    matches!(state, PermissionState::Granted)
+}
+
 #[tauri::command]
 pub fn open_permission_settings(app: AppHandle, which: String) -> Result<(), String> {
     let url = match which.as_str() {

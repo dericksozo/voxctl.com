@@ -9,55 +9,80 @@ use crate::events::{self, BackendError, TranscriptText};
 use crate::history;
 use crate::hud;
 use crate::resample;
-use crate::transcription::{OpenAiRealtimeTranscriber, Transcriber};
+use crate::transcription::{OpenAiRealtimeTranscriber, RealtimeSession, Transcriber};
 
-/// Called with the raw mono f32 samples at the device input rate.
-pub fn on_recording_finished(app: &AppHandle, samples: Vec<f32>, rate: u32, ctx: RecordingContext) {
+/// Called with the raw mono f32 samples at the device input rate, plus the live
+/// transcription session opened at record-start (None when there was no API
+/// key). Prefers the streamed transcript; falls back to a one-shot transcription
+/// of the full buffer if the live session failed. The WAV is always saved.
+pub fn on_recording_finished(
+    app: &AppHandle,
+    samples: Vec<f32>,
+    rate: u32,
+    ctx: RecordingContext,
+    session: Option<RealtimeSession>,
+) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let pcm16 = resample::resample_to_pcm16_24k(&samples, rate);
 
-        let transcript = match config::get_api_key() {
-            None => {
-                log::warn!("no API key set; skipping transcription");
-                let _ = app.emit(
-                    events::ERROR,
-                    BackendError::new(
-                        "transcription",
-                        "No OpenAI API key set. Add one in Settings.",
-                    ),
-                );
-                String::new()
-            }
-            Some(key) => {
-                let transcriber = OpenAiRealtimeTranscriber::new(key);
-                let app_delta = app.clone();
-                let on_delta = move |text: String| {
-                    let _ = app_delta.emit(events::TRANSCRIPT_PARTIAL, TranscriptText { text });
-                };
-                match transcriber
-                    .transcribe(&pcm16, ctx.language.as_deref(), &on_delta)
-                    .await
-                {
-                    Ok(text) => {
-                        log::info!("final transcript: {} chars", text.len());
-                        let _ = app.emit(
-                            events::TRANSCRIPT_FINAL,
-                            TranscriptText { text: text.clone() },
-                        );
-                        text
-                    }
-                    Err(e) => {
-                        log::error!("transcription failed: {e}");
-                        let _ = app.emit(events::ERROR, BackendError::new("transcription", e));
-                        String::new()
-                    }
+        let transcript = match session {
+            Some(session) => match session.finish().await {
+                Ok(text) => {
+                    log::info!("final transcript (streamed): {} chars", text.len());
+                    let _ = app.emit(
+                        events::TRANSCRIPT_FINAL,
+                        TranscriptText { text: text.clone() },
+                    );
+                    text
                 }
-            }
+                Err(e) => {
+                    log::warn!("live transcription failed ({e}); falling back to batch");
+                    batch_transcribe(&app, &pcm16, &ctx).await
+                }
+            },
+            None => batch_transcribe(&app, &pcm16, &ctx).await,
         };
 
         finalize(&app, &pcm16, &transcript, &ctx);
     });
+}
+
+/// One-shot transcription of the full buffer — used when there's no API key or
+/// when the live streaming session failed. Emits a final transcript or a (quiet)
+/// error and returns the text (empty string on failure, so the WAV is still saved).
+async fn batch_transcribe(app: &AppHandle, pcm16: &[i16], ctx: &RecordingContext) -> String {
+    let Some(key) = config::get_api_key() else {
+        log::warn!("no API key set; skipping transcription");
+        let _ = app.emit(
+            events::ERROR,
+            BackendError::new(
+                "transcription",
+                "No OpenAI API key set. Add one in Settings.",
+            ),
+        );
+        return String::new();
+    };
+    let transcriber = OpenAiRealtimeTranscriber::new(key);
+    let no_delta = |_t: String| {};
+    match transcriber
+        .transcribe(pcm16, ctx.language.as_deref(), &no_delta)
+        .await
+    {
+        Ok(text) => {
+            log::info!("final transcript (batch): {} chars", text.len());
+            let _ = app.emit(
+                events::TRANSCRIPT_FINAL,
+                TranscriptText { text: text.clone() },
+            );
+            text
+        }
+        Err(e) => {
+            log::error!("transcription failed: {e}");
+            let _ = app.emit(events::ERROR, BackendError::new("transcription", e));
+            String::new()
+        }
+    }
 }
 
 /// Inject the final transcript into the frontmost app (clipboard untouched
@@ -65,6 +90,9 @@ pub fn on_recording_finished(app: &AppHandle, samples: Vec<f32>, rate: u32, ctx:
 /// hides the HUD; ALWAYS saves so a recording is never lost (brief §3).
 fn finalize(app: &AppHandle, pcm16: &[i16], transcript: &str, ctx: &RecordingContext) {
     let trimmed = transcript.trim();
+    // An empty transcript means transcription failed (an error was already
+    // emitted) or there was no speech; either way the HUD should linger briefly.
+    let mut had_error = trimmed.is_empty();
     if !trimmed.is_empty() {
         let cfg = config::load_config(app);
 
@@ -80,10 +108,12 @@ fn finalize(app: &AppHandle, pcm16: &[i16], transcript: &str, ctx: &RecordingCon
         if crate::platform::macos::accessibility_trusted() {
             if let Err(e) = crate::commands::inject::insert_text(transcript) {
                 log::error!("injection failed: {e}");
+                had_error = true;
                 let _ = app.emit(events::ERROR, BackendError::new("inject", e));
             }
         } else {
             log::warn!("accessibility not granted; skipping injection");
+            had_error = true;
             let _ = app.emit(
                 events::ERROR,
                 BackendError::new(
@@ -113,5 +143,15 @@ fn finalize(app: &AppHandle, pcm16: &[i16], transcript: &str, ctx: &RecordingCon
         Err(e) => log::error!("failed to save recording: {e}"),
     }
 
-    hud::hide_hud(app);
+    // On success, hide immediately. On failure, keep the quiet HUD ERROR status
+    // up for a moment so the user notices, then hide it.
+    if had_error {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(2200)).await;
+            hud::hide_hud(&app);
+        });
+    } else {
+        hud::hide_hud(app);
+    }
 }

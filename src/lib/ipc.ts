@@ -16,6 +16,9 @@ export const openPermissionSettings = (which: "microphone" | "accessibility") =>
   invoke<void>("open_permission_settings", { which });
 export const requestMicrophone = () => invoke<boolean>("request_microphone");
 export const requestAccessibility = () => invoke<boolean>("request_accessibility");
+/** Prompt for macOS notification permission (tied to enabling alerts). */
+export const requestNotificationPermission = () =>
+  invoke<boolean>("request_notification_permission");
 
 // --- Recording control ---
 export const startRecording = () => invoke<void>("start_recording");

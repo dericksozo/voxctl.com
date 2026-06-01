@@ -140,6 +140,27 @@ button {
 .mode-pill b {
   font-weight: 700;
 }
+button.mode-pill {
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+.mode-pill.warn {
+  color: var(--pink);
+  border-color: var(--pink);
+  background: color-mix(in srgb, var(--pink) 12%, transparent);
+  font-weight: 700;
+  animation: permPulse 1.6s ease-in-out infinite;
+}
+@keyframes permPulse {
+  0%,
+  100% {
+    background: color-mix(in srgb, var(--pink) 12%, transparent);
+  }
+  50% {
+    background: color-mix(in srgb, var(--pink) 26%, transparent);
+  }
+}
 .head-stat {
   font-size: 11px;
   letter-spacing: 0.16em;
@@ -1056,29 +1077,10 @@ button {
 }
 
 /* ---------- onboarding / permissions ---------- */
-.perm-banner {
-  border: 1px solid color-mix(in srgb, var(--pink) 45%, transparent);
-  background: color-mix(in srgb, var(--pink) 5%, transparent);
-  padding: 12px 14px;
-  margin-bottom: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-}
-.perm-banner .pb-text {
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  color: var(--ink-soft);
-  line-height: 1.5;
-}
-.perm-banner .pb-text b {
-  color: var(--pink);
-}
-.onboard {
+.perm-cards {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 10px;
 }
 .perm-card {
   border: 1px solid var(--line);
