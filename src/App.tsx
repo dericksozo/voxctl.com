@@ -36,6 +36,7 @@ export default function App() {
   const [view, setView] = useState("home");
   const [phase, setPhase] = useState<"idle" | "closing" | "opening">("idle");
   const [theme, setTheme] = useState<Theme>(DEFAULT_THEME);
+  const [audioStopToken, setAudioStopToken] = useState(0);
 
   const [modes, setModes] = useState<Mode[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -105,6 +106,7 @@ export default function App() {
   const switchTo = useCallback(
     (id: string) => {
       if (id === view || phase !== "idle") return;
+      setAudioStopToken((n) => n + 1);
       timers.current.forEach(clearTimeout);
       setPhase("closing");
       timers.current = [
@@ -160,7 +162,7 @@ export default function App() {
       case "home":
         return <HomePanel history={history} go={switchTo} />;
       case "history":
-        return <HistoryPanel history={history} onChange={refreshHistory} />;
+        return <HistoryPanel history={history} onChange={refreshHistory} stopToken={audioStopToken} />;
       case "modes":
         return <ModesPanel modes={modes} activeModeId={activeMode?.id ?? null} onChange={refreshModes} />;
       case "settings":

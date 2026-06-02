@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { t } from "../i18n";
 import { langLabel, LANGUAGES } from "../lib/languages";
 import {
@@ -30,14 +30,48 @@ const timeLabel = (ts: number) => {
 const durLabel = (s: number) => `${Math.floor(s / 60)}:${pad(Math.round(s % 60))}`;
 const fmtCount = (n: number) => (n >= 10 ? "10+" : String(n));
 
-export function HistoryPanel({ history, onChange }: { history: HistoryItem[]; onChange: () => void }) {
+type ActiveAudio = {
+  id: number;
+  audio: HTMLAudioElement;
+  url: string;
+};
+
+export function HistoryPanel({
+  history,
+  onChange,
+  stopToken = 0,
+}: {
+  history: HistoryItem[];
+  onChange: () => void;
+  stopToken?: number;
+}) {
   const [expanded, setExpanded] = useState<number | null>(null);
   const [copied, setCopied] = useState<number | null>(null);
   const [playing, setPlaying] = useState<number | null>(null);
   const [rerunFor, setRerunFor] = useState<number | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
   const copyTref = useRef<number | undefined>(undefined);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioRef = useRef<ActiveAudio | null>(null);
+  const playSeq = useRef(0);
+
+  const stopPlayback = useCallback((updateState = true) => {
+    playSeq.current += 1;
+    const active = audioRef.current;
+    if (active) {
+      active.audio.pause();
+      active.audio.removeAttribute("src");
+      active.audio.load();
+      URL.revokeObjectURL(active.url);
+      audioRef.current = null;
+    }
+    if (updateState) setPlaying(null);
+  }, []);
+
+  useEffect(() => () => stopPlayback(false), [stopPlayback]);
+
+  useEffect(() => {
+    if (stopToken > 0) stopPlayback();
+  }, [stopPlayback, stopToken]);
 
   async function doCopy(e: React.MouseEvent, item: HistoryItem) {
     e.stopPropagation();
@@ -60,25 +94,36 @@ export function HistoryPanel({ history, onChange }: { history: HistoryItem[]; on
   async function doPlay(e: React.MouseEvent, item: HistoryItem) {
     e.stopPropagation();
     if (playing === item.id) {
-      audioRef.current?.pause();
-      audioRef.current = null;
-      setPlaying(null);
+      stopPlayback();
       return;
     }
+    stopPlayback();
+    const seq = playSeq.current;
+    setPlaying(item.id);
     try {
       const bytes = await readAudio(item.id);
+      if (seq !== playSeq.current) return;
       const blob = new Blob([new Uint8Array(bytes)], { type: "audio/wav" });
       const url = URL.createObjectURL(blob);
       const a = new Audio(url);
-      audioRef.current = a;
+      audioRef.current = { id: item.id, audio: a, url };
       a.onended = () => {
+        if (seq !== playSeq.current) return;
         URL.revokeObjectURL(url);
+        audioRef.current = null;
         setPlaying(null);
       };
+      a.onerror = () => {
+        if (seq === playSeq.current) stopPlayback();
+      };
       await a.play();
-      setPlaying(item.id);
+      if (seq !== playSeq.current) {
+        a.pause();
+        URL.revokeObjectURL(url);
+      }
     } catch (err) {
       console.error("playback failed", err);
+      if (seq === playSeq.current) stopPlayback();
     }
   }
 
