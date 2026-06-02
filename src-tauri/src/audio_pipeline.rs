@@ -1,5 +1,6 @@
-//! Orchestration invoked when a recording stops: resample → transcribe →
-//! inject → save to history. Runs off the UI/audio threads on the async runtime.
+//! Orchestration invoked when a recording stops: resample for persistence,
+//! collect the live transcript, inject, and save to history. Runs off the
+//! UI/audio threads on the async runtime.
 
 use tauri::{AppHandle, Emitter};
 
@@ -9,12 +10,13 @@ use crate::events::{self, BackendError, TranscriptText};
 use crate::history;
 use crate::hud;
 use crate::resample;
-use crate::transcription::{OpenAiRealtimeTranscriber, RealtimeSession, Transcriber};
+use crate::transcription::RealtimeSession;
 
 /// Called with the raw mono f32 samples at the device input rate, plus the live
 /// transcription session opened at record-start (None when there was no API
-/// key). Prefers the streamed transcript; falls back to a one-shot transcription
-/// of the full buffer if the live session failed. The WAV is always saved.
+/// key). Uses only the live transcript assembled from manually committed chunks.
+/// Full-buffer retranscription is user-triggered from History only. The WAV is
+/// always saved.
 pub fn on_recording_finished(
     app: &AppHandle,
     samples: Vec<f32>,
@@ -27,50 +29,21 @@ pub fn on_recording_finished(
         let pcm16 = resample::resample_to_pcm16_24k(&samples, rate);
 
         let transcript = match session {
-            Some(session) => match session.finish().await {
-                Ok(text) => {
-                    log::info!("final transcript (streamed): {} chars", text.len());
-                    let _ = app.emit(
-                        events::TRANSCRIPT_FINAL,
-                        TranscriptText { text: text.clone() },
-                    );
-                    text
-                }
-                Err(e) => {
-                    log::warn!("live transcription failed ({e}); falling back to batch");
-                    batch_transcribe(&app, &pcm16, &ctx).await
-                }
-            },
-            None => batch_transcribe(&app, &pcm16, &ctx).await,
+            Some(session) => live_transcript_or_error(&app, session.finish().await),
+            None => {
+                emit_no_api_key_error(&app);
+                String::new()
+            }
         };
 
         finalize(&app, &pcm16, &transcript, &ctx);
     });
 }
 
-/// One-shot transcription of the full buffer — used when there's no API key or
-/// when the live streaming session failed. Emits a final transcript or a (quiet)
-/// error and returns the text (empty string on failure, so the WAV is still saved).
-async fn batch_transcribe(app: &AppHandle, pcm16: &[i16], ctx: &RecordingContext) -> String {
-    let Some(key) = config::get_api_key() else {
-        log::warn!("no API key set; skipping transcription");
-        let _ = app.emit(
-            events::ERROR,
-            BackendError::new(
-                "transcription",
-                "No OpenAI API key set. Add one in Settings.",
-            ),
-        );
-        return String::new();
-    };
-    let transcriber = OpenAiRealtimeTranscriber::new(key);
-    let no_delta = |_t: String| {};
-    match transcriber
-        .transcribe(pcm16, ctx.language.as_deref(), &no_delta)
-        .await
-    {
+fn live_transcript_or_error(app: &AppHandle, result: Result<String, String>) -> String {
+    match result {
         Ok(text) => {
-            log::info!("final transcript (batch): {} chars", text.len());
+            log::info!("final transcript (streamed): {} chars", text.len());
             let _ = app.emit(
                 events::TRANSCRIPT_FINAL,
                 TranscriptText { text: text.clone() },
@@ -78,11 +51,22 @@ async fn batch_transcribe(app: &AppHandle, pcm16: &[i16], ctx: &RecordingContext
             text
         }
         Err(e) => {
-            log::error!("transcription failed: {e}");
+            log::error!("live transcription failed: {e}");
             let _ = app.emit(events::ERROR, BackendError::new("transcription", e));
             String::new()
         }
     }
+}
+
+fn emit_no_api_key_error(app: &AppHandle) {
+    log::warn!("no API key set; skipping transcription");
+    let _ = app.emit(
+        events::ERROR,
+        BackendError::new(
+            "transcription",
+            "No OpenAI API key set. Add one in Settings.",
+        ),
+    );
 }
 
 /// Inject the final transcript into the frontmost app (clipboard untouched
@@ -155,5 +139,16 @@ fn finalize(app: &AppHandle, pcm16: &[i16], transcript: &str, ctx: &RecordingCon
         });
     } else {
         hud::hide_hud(app);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn normal_recording_has_no_batch_transcription_fallback() {
+        let source = include_str!("audio_pipeline.rs");
+        assert!(!source.contains(concat!("batch", "_transcribe")));
+        assert!(!source.contains(concat!("OpenAi", "RealtimeTranscriber")));
+        assert!(source.contains("Full-buffer retranscription is user-triggered from History only"));
     }
 }

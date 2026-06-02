@@ -51,6 +51,15 @@ fn preset(id: &str, name: &str, language: &str, apps: &[&str], sites: &[&str]) -
     }
 }
 
+fn normalize_mode(mut mode: Mode) -> Mode {
+    mode.model = MODEL.into();
+    mode
+}
+
+fn normalize_modes(modes: Vec<Mode>) -> Vec<Mode> {
+    modes.into_iter().map(normalize_mode).collect()
+}
+
 /// Built-in presets shipped with the app (brief §3).
 pub fn default_modes() -> Vec<Mode> {
     vec![
@@ -77,6 +86,11 @@ fn load(app: &AppHandle) -> Vec<Mode> {
     if let Ok(store) = app.store(STORE_FILE) {
         if let Some(v) = store.get(KEY) {
             if let Ok(modes) = serde_json::from_value::<Vec<Mode>>(v) {
+                let modes = normalize_modes(modes);
+                if let Ok(v) = serde_json::to_value(&modes) {
+                    store.set(KEY, v);
+                    let _ = store.save();
+                }
                 return modes;
             }
         }
@@ -113,6 +127,7 @@ pub fn list_modes(app: AppHandle) -> Vec<Mode> {
 
 #[tauri::command]
 pub fn save_mode(app: AppHandle, mode: Mode) {
+    let mode = normalize_mode(mode);
     let mut modes = load(&app);
     if let Some(existing) = modes.iter_mut().find(|m| m.id == mode.id) {
         *existing = mode;
@@ -315,5 +330,15 @@ mod tests {
         // First in list wins on app; but a site match should still resolve to site_mode.
         let m = match_mode(&modes, Some("Safari"), Some("preply.com"));
         assert_eq!(m.unwrap().id, "site_mode");
+    }
+
+    #[test]
+    fn normalizes_stale_model_values() {
+        let mut stale = mode("stale", &[], &[], true);
+        stale.model = "whisper-large-v3".into();
+
+        let modes = normalize_modes(vec![stale]);
+
+        assert_eq!(modes[0].model, MODEL);
     }
 }

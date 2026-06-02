@@ -198,9 +198,9 @@ function FilesPanel({ files, onDelete }) {
 /* ---------- MODES ---------- */
 function ModesPanel({ modes, onToggle, onAdd }) {
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ n: "", trig: "", lang: "AUTO", model: "whisper-large-v3" });
+  const [form, setForm] = useState({ n: "", trig: "", lang: "AUTO", model: "gpt-realtime-whisper" });
   function set(k, v) { setForm((s) => ({ ...s, [k]: v })); }
-  function cancel() { setCreating(false); setForm({ n: "", trig: "", lang: "AUTO", model: "whisper-large-v3" }); }
+  function cancel() { setCreating(false); setForm({ n: "", trig: "", lang: "AUTO", model: "gpt-realtime-whisper" }); }
   function save() { onAdd(form); cancel(); }
 
   if (creating) {
@@ -230,7 +230,7 @@ function ModesPanel({ modes, onToggle, onAdd }) {
           <div className="nm-field">
             <label>MODEL</label>
             <select className="set-select" value={form.model} onChange={(e) => set("model", e.target.value)}>
-              <option>whisper-large-v3</option><option>gpt-realtime-whisper</option>
+              <option>gpt-realtime-whisper</option>
             </select>
           </div>
         </div>
