@@ -3,15 +3,16 @@
 //! the OpenAI Realtime API over a rustls WebSocket from Rust — the API key never
 //! leaves the backend.
 //!
-//! Product behavior is "transcribe on stop": we send the full 24 kHz mono PCM16
-//! buffer as `input_audio_buffer.append` chunks, `commit`, then read the
-//! streamed `...transcription.delta` events (surfaced as a live HUD preview) and
-//! the final `...transcription.completed` transcript.
+//! Live sessions append audio as it is captured and use client-side silence
+//! detection to commit chunks. `gpt-realtime-whisper` does not support Realtime
+//! turn detection, so the session sets `turn_detection` to null and commits the
+//! final tail on stop. Deltas are surfaced as the HUD preview; completed items
+//! are stitched together for the final transcript.
 //!
 //! NOTE: this is the highest-risk surface — the exact GA message shape can only
 //! be confirmed against a live key (see MANUAL_TEST.md). Parsing is defensive.
 
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
@@ -25,8 +26,13 @@ use tokio_tungstenite::{
 
 const WS_URL: &str = "wss://api.openai.com/v1/realtime?intent=transcription";
 const MODEL: &str = "gpt-realtime-whisper";
+const TRANSCRIPTION_DELAY: &str = "low";
 /// ~0.67 s of 24 kHz audio per append message.
 const APPEND_SAMPLES: usize = 16000;
+const SAMPLE_RATE: usize = 24000;
+const MANUAL_COMMIT_SILENCE_MS: u32 = 1500;
+const MANUAL_COMMIT_SILENCE_SAMPLES: usize = SAMPLE_RATE * MANUAL_COMMIT_SILENCE_MS as usize / 1000;
+const MANUAL_COMMIT_RMS_THRESHOLD: f32 = 0.01;
 const READ_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[async_trait::async_trait]
@@ -86,7 +92,7 @@ impl RealtimeSession {
 
     /// Stop accepting audio and await the final transcript. Drops this handle's
     /// sender; once all other senders (the capture forwarder) are gone too, the
-    /// background task commits the buffer and reads to completion.
+    /// background task commits any final buffered audio and reads to completion.
     pub async fn finish(self) -> Result<String, String> {
         drop(self.audio_tx);
         self.done_rx
@@ -96,8 +102,8 @@ impl RealtimeSession {
 }
 
 /// Background task owning the WebSocket for a live session: appends audio as it
-/// streams in, commits when the audio channel closes, and reads to the final
-/// transcript (with a post-commit timeout).
+/// streams in, commits chunks after local silence detection, and waits for any
+/// in-flight transcript items after capture stops.
 async fn session_task<F>(
     api_key: String,
     language: Option<String>,
@@ -111,55 +117,166 @@ async fn session_task<F>(
     let _ = done_tx.send(result);
 }
 
-/// Interpret one inbound WS frame. Returns `Some(terminal result)` for a
-/// completed/error/close frame, or `None` to keep reading (deltas, non-text
-/// frames, unrelated events). `running` accumulates streamed deltas.
+#[derive(Default)]
+struct LiveTranscript {
+    item_order: Vec<String>,
+    text_by_item: HashMap<String, String>,
+    anonymous: String,
+}
+
+impl LiveTranscript {
+    fn note_item(&mut self, item_id: &str) {
+        if !self.item_order.iter().any(|id| id == item_id) {
+            self.item_order.push(item_id.to_string());
+        }
+    }
+
+    fn push_delta(&mut self, item_id: Option<&str>, delta: &str) {
+        if let Some(item_id) = item_id {
+            self.note_item(item_id);
+            self.text_by_item
+                .entry(item_id.to_string())
+                .or_default()
+                .push_str(delta);
+        } else {
+            self.anonymous.push_str(delta);
+        }
+    }
+
+    fn complete(&mut self, item_id: Option<&str>, text: String) {
+        if let Some(item_id) = item_id {
+            self.note_item(item_id);
+            self.text_by_item.insert(item_id.to_string(), text);
+        } else {
+            append_transcript_part(&mut self.anonymous, &text);
+        }
+    }
+
+    fn text(&self) -> String {
+        let mut out = String::new();
+        for item_id in &self.item_order {
+            if let Some(text) = self.text_by_item.get(item_id) {
+                append_transcript_part(&mut out, text);
+            }
+        }
+        append_transcript_part(&mut out, &self.anonymous);
+        out
+    }
+}
+
+enum FrameSignal {
+    Continue,
+    Committed,
+    Completed,
+    Closed,
+}
+
+#[derive(Default)]
+struct ManualCommitDetector {
+    uncommitted_samples: usize,
+    speech_seen: bool,
+    silence_after_speech: usize,
+}
+
+impl ManualCommitDetector {
+    fn observe(&mut self, chunk: &[i16]) -> bool {
+        self.uncommitted_samples += chunk.len();
+
+        if chunk_rms(chunk) >= MANUAL_COMMIT_RMS_THRESHOLD {
+            self.speech_seen = true;
+            self.silence_after_speech = 0;
+            return false;
+        }
+
+        if self.speech_seen {
+            self.silence_after_speech += chunk.len();
+        }
+
+        self.should_commit()
+    }
+
+    fn should_commit(&self) -> bool {
+        self.uncommitted_samples > 0
+            && self.speech_seen
+            && self.silence_after_speech >= MANUAL_COMMIT_SILENCE_SAMPLES
+    }
+
+    fn should_commit_final(&self) -> bool {
+        self.uncommitted_samples > 0
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+fn chunk_rms(chunk: &[i16]) -> f32 {
+    if chunk.is_empty() {
+        return 0.0;
+    }
+    let sum_squares = chunk
+        .iter()
+        .map(|s| {
+            let normalized = *s as f32 / i16::MAX as f32;
+            normalized * normalized
+        })
+        .sum::<f32>();
+    (sum_squares / chunk.len() as f32).sqrt()
+}
+
+/// Interpret one inbound WS frame. Deltas and completed items update
+/// `transcript`; errors are terminal. Completion is not terminal for a live
+/// session because we commit multiple audio items during one recording.
 fn handle_frame(
     frame: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>,
-    running: &mut String,
+    transcript: &mut LiveTranscript,
     on_delta: &impl Fn(String),
-) -> Option<Result<String, String>> {
+) -> Result<FrameSignal, String> {
     let f = match frame {
         Some(Ok(f)) => f,
-        Some(Err(e)) => return Some(Err(format!("ws read: {e}"))),
-        None => {
-            return Some(if running.is_empty() {
-                Err("connection closed before transcript".into())
-            } else {
-                Ok(running.clone())
-            })
-        }
+        Some(Err(e)) => return Err(format!("ws read: {e}")),
+        None => return Ok(FrameSignal::Closed),
     };
     if f.is_close() {
-        return Some(if running.is_empty() {
-            Err("connection closed before transcript".into())
-        } else {
-            Ok(running.clone())
-        });
+        return Ok(FrameSignal::Closed);
     }
     let txt = match f.to_text() {
         Ok(t) => t,
-        Err(_) => return None,
+        Err(_) => return Ok(FrameSignal::Continue),
     };
     let v = match serde_json::from_str::<Value>(txt) {
         Ok(v) => v,
-        Err(_) => return None,
+        Err(_) => return Ok(FrameSignal::Continue),
     };
     match v.get("type").and_then(Value::as_str).unwrap_or("") {
+        "input_audio_buffer.committed" => {
+            if let Some(item_id) = v.get("item_id").and_then(Value::as_str) {
+                transcript.note_item(item_id);
+            }
+            Ok(FrameSignal::Committed)
+        }
         "conversation.item.input_audio_transcription.delta" => {
             if let Some(d) = v.get("delta").and_then(Value::as_str) {
-                running.push_str(d);
-                on_delta(running.clone());
+                let item_id = v.get("item_id").and_then(Value::as_str);
+                transcript.push_delta(item_id, d);
+                on_delta(transcript.text());
             }
-            None
+            Ok(FrameSignal::Continue)
         }
         "conversation.item.input_audio_transcription.completed" => {
+            let item_id = v.get("item_id").and_then(Value::as_str);
+            let fallback = item_id
+                .and_then(|id| transcript.text_by_item.get(id))
+                .cloned()
+                .unwrap_or_default();
             let text = v
                 .get("transcript")
                 .and_then(Value::as_str)
                 .map(str::to_string)
-                .unwrap_or_else(|| running.clone());
-            Some(Ok(text))
+                .unwrap_or(fallback);
+            transcript.complete(item_id, text);
+            on_delta(transcript.text());
+            Ok(FrameSignal::Completed)
         }
         "error" => {
             let msg = v
@@ -167,10 +284,35 @@ fn handle_frame(
                 .and_then(|e| e.get("message"))
                 .and_then(Value::as_str)
                 .unwrap_or("unknown error");
-            Some(Err(format!("api error: {msg}")))
+            Err(format!("api error: {msg}"))
         }
-        _ => None,
+        _ => Ok(FrameSignal::Continue),
     }
+}
+
+fn append_transcript_part(out: &mut String, part: &str) {
+    if part.is_empty() {
+        return;
+    }
+    if should_insert_space(out, part) {
+        out.push(' ');
+    }
+    out.push_str(part);
+}
+
+fn should_insert_space(out: &str, part: &str) -> bool {
+    let Some(prev) = out.chars().next_back() else {
+        return false;
+    };
+    let Some(next) = part.chars().next() else {
+        return false;
+    };
+    prev.is_ascii_alphanumeric() && next.is_ascii_alphanumeric()
+}
+
+fn is_empty_commit_error(msg: &str) -> bool {
+    let msg = msg.to_ascii_lowercase();
+    msg.contains("commit") && (msg.contains("empty") || msg.contains("no audio"))
 }
 
 async fn run_session<F>(
@@ -204,64 +346,98 @@ where
         .await
         .map_err(|e| format!("send session.update: {e}"))?;
 
-    let mut running = String::new();
+    let mut transcript = LiveTranscript::default();
+    let mut commit_detector = ManualCommitDetector::default();
+    let mut pending_commits = 0usize;
+    let mut awaiting_final_commit = false;
 
-    // Phase 1: stream audio in as it's captured while reading deltas, until the
-    // audio channel closes (end of recording) or the model finishes early.
-    let early: Option<Result<String, String>> = loop {
+    // Phase 1: stream audio as it is captured. Since `gpt-realtime-whisper`
+    // does not support API turn detection, local silence detection commits
+    // chunks after 1500 ms of silence; stop always commits any remaining tail.
+    loop {
         tokio::select! {
             maybe_chunk = audio_rx.recv() => {
                 match maybe_chunk {
                     Some(chunk) if !chunk.is_empty() => {
                         let msg = json!({ "type": "input_audio_buffer.append", "audio": pcm16_to_base64(&chunk) });
                         if let Err(e) = write.send(Message::Text(msg.to_string())).await {
-                            break Some(Err(format!("send audio: {e}")));
+                            return Err(format!("send audio: {e}"));
+                        }
+                        if commit_detector.observe(&chunk) {
+                            send_commit(&mut write, "silence commit").await?;
+                            pending_commits += 1;
+                            commit_detector.reset();
                         }
                     }
                     Some(_) => {}
-                    None => break None,
+                    None => {
+                        if commit_detector.should_commit_final() {
+                            send_commit(&mut write, "final commit").await?;
+                            pending_commits += 1;
+                            awaiting_final_commit = true;
+                            commit_detector.reset();
+                        }
+                        break;
+                    }
                 }
             }
             frame = read.next() => {
-                if let Some(res) = handle_frame(frame, &mut running, on_delta) {
-                    break Some(res);
+                match handle_frame(frame, &mut transcript, on_delta)? {
+                    FrameSignal::Committed => {}
+                    FrameSignal::Completed => pending_commits = pending_commits.saturating_sub(1),
+                    FrameSignal::Closed => break,
+                    FrameSignal::Continue => {}
                 }
             }
         }
-    };
+    }
 
-    // Phase 2: commit and read to the final transcript (bounded by READ_TIMEOUT).
-    let result = match early {
-        Some(res) => res,
-        None => {
-            if let Err(e) = write
-                .send(Message::Text(
-                    json!({ "type": "input_audio_buffer.commit" }).to_string(),
-                ))
-                .await
-            {
-                Err(format!("send commit: {e}"))
-            } else {
-                let read_final = async {
-                    loop {
-                        if let Some(res) = handle_frame(read.next().await, &mut running, on_delta) {
-                            return res;
-                        }
-                    }
-                };
-                timeout(READ_TIMEOUT, read_final).await.unwrap_or_else(|_| {
-                    if running.is_empty() {
-                        Err("transcription timed out".into())
-                    } else {
-                        Ok(running.clone())
-                    }
-                })
+    // Phase 2: read completions for committed chunks still in flight. If our
+    // final manual commit races with an automatic VAD commit, the API may report
+    // an empty buffer; keep the transcript already produced in that case.
+    let read_final = async {
+        while pending_commits > 0 || awaiting_final_commit {
+            match handle_frame(read.next().await, &mut transcript, on_delta) {
+                Ok(FrameSignal::Committed) => {
+                    awaiting_final_commit = false;
+                }
+                Ok(FrameSignal::Completed) => pending_commits = pending_commits.saturating_sub(1),
+                Ok(FrameSignal::Closed) => break,
+                Ok(FrameSignal::Continue) => {}
+                Err(e) if awaiting_final_commit && is_empty_commit_error(&e) => {
+                    awaiting_final_commit = false;
+                    pending_commits = pending_commits.saturating_sub(1);
+                }
+                Err(e) => return Err(e),
             }
         }
+        Ok::<String, String>(transcript.text())
     };
+
+    let result = timeout(READ_TIMEOUT, read_final).await.unwrap_or_else(|_| {
+        let text = transcript.text();
+        if text.is_empty() {
+            Err("transcription timed out".into())
+        } else {
+            Ok(text)
+        }
+    });
 
     let _ = write.send(Message::Close(None)).await;
     result
+}
+
+async fn send_commit<S>(write: &mut S, label: &str) -> Result<(), String>
+where
+    S: SinkExt<Message> + Unpin,
+    <S as futures_util::Sink<Message>>::Error: std::fmt::Display,
+{
+    write
+        .send(Message::Text(
+            json!({ "type": "input_audio_buffer.commit" }).to_string(),
+        ))
+        .await
+        .map_err(|e| format!("send {label}: {e}"))
 }
 
 fn pcm16_to_base64(samples: &[i16]) -> String {
@@ -275,6 +451,7 @@ fn pcm16_to_base64(samples: &[i16]) -> String {
 fn session_update(language: Option<&str>) -> Value {
     let mut transcription = serde_json::Map::new();
     transcription.insert("model".into(), json!(MODEL));
+    transcription.insert("delay".into(), json!(TRANSCRIPTION_DELAY));
     if let Some(l) = language {
         if !l.is_empty() && l != "auto" {
             transcription.insert("language".into(), json!(l));
@@ -416,6 +593,7 @@ mod tests {
         let v = session_update(Some("auto"));
         let tr = &v["session"]["audio"]["input"]["transcription"];
         assert_eq!(tr["model"], json!(MODEL));
+        assert_eq!(tr["delay"], json!(TRANSCRIPTION_DELAY));
         assert!(tr.get("language").is_none());
         assert!(v["session"]["audio"]["input"]["turn_detection"].is_null());
     }
@@ -427,6 +605,28 @@ mod tests {
             v["session"]["audio"]["input"]["transcription"]["language"],
             json!("es")
         );
+    }
+
+    #[test]
+    fn realtime_whisper_session_disables_turn_detection() {
+        let v = session_update(Some("en"));
+        assert_eq!(
+            v["session"]["audio"]["input"]["transcription"]["model"],
+            json!(MODEL)
+        );
+        assert!(v["session"]["audio"]["input"]["turn_detection"].is_null());
+    }
+
+    #[test]
+    fn manual_commit_detector_uses_1500ms_silence_window() {
+        let mut detector = ManualCommitDetector::default();
+        let speech = vec![i16::MAX / 4; 1200];
+        let almost_silence_window = vec![0; MANUAL_COMMIT_SILENCE_SAMPLES - 1];
+        let last_silent_sample = vec![0; 1];
+
+        assert!(!detector.observe(&speech));
+        assert!(!detector.observe(&almost_silence_window));
+        assert!(detector.observe(&last_silent_sample));
     }
 
     /// Minimal WAV (PCM16) reader: find the `data` chunk and read i16 LE samples.

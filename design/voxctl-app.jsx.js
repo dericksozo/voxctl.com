@@ -27,9 +27,9 @@ const FILES0 = [
 const MODES0 = [
   { id: "claude", n: "CLAUDE", trig: "claude.ai", lang: "EN", model: "gpt-realtime-whisper", on: true, active: true },
   { id: "gpt", n: "CHATGPT", trig: "chatgpt.com", lang: "EN", model: "gpt-realtime-whisper", on: true, active: false },
-  { id: "gemini", n: "GEMINI", trig: "gemini.google.com", lang: "AUTO", model: "whisper-large-v3", on: true, active: false },
-  { id: "code", n: "CODE", trig: "VS CODE · TERMINAL", lang: "EN", model: "whisper-large-v3", on: true, active: false },
-  { id: "lang", n: "LANGUAGE LEARNING", trig: "preply.com", lang: "ES", model: "whisper-large-v3", on: false, active: false },
+  { id: "gemini", n: "GEMINI", trig: "gemini.google.com", lang: "AUTO", model: "gpt-realtime-whisper", on: true, active: false },
+  { id: "code", n: "CODE", trig: "VS CODE · TERMINAL", lang: "EN", model: "gpt-realtime-whisper", on: true, active: false },
+  { id: "lang", n: "LANGUAGE LEARNING", trig: "preply.com", lang: "ES", model: "gpt-realtime-whisper", on: false, active: false },
 ];
 
 function pad(n) { return String(n).padStart(2, "0"); }

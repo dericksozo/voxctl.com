@@ -228,9 +228,10 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
     let ctx = crate::commands::modes::resolve_context(app, override_lang);
     let language = ctx.language.clone();
 
-    // Open a live transcription session (when a key exists) so audio streams to
-    // OpenAI WHILE recording — the transcript is essentially ready on stop. The
-    // captured audio is still buffered for the WAV regardless of streaming.
+    // Open a live transcription session (when a key exists). Audio streams to
+    // OpenAI while recording; local silence detection commits chunks so most
+    // transcription work happens before the user stops. The captured audio is
+    // still buffered locally for the WAV regardless of streaming.
     let session_bits = match crate::commands::config::get_api_key() {
         Some(key) => {
             let app_delta = app.clone();

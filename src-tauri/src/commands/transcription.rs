@@ -1,6 +1,6 @@
-//! Re-transcribe a saved recording against a (possibly different) language,
-//! running the original audio back through the realtime API and updating the
-//! stored transcript.
+//! User-triggered re-transcription for a saved recording. This is the only path
+//! that reads an archived WAV and sends the full audio buffer back through the
+//! realtime API, then updates the stored transcript.
 
 use tauri::{AppHandle, Emitter, Manager};
 
