@@ -6,9 +6,9 @@
 use tauri::{AppHandle, LogicalPosition, Manager, WebviewUrl, WebviewWindowBuilder};
 
 const LABEL: &str = "hud";
-const W: f64 = 560.0;
-const H: f64 = 70.0;
-const BOTTOM_MARGIN: f64 = 84.0;
+const W: f64 = 300.0;
+const H: f64 = 64.0;
+const BOTTOM_MARGIN: f64 = 22.0;
 
 fn position(app: &AppHandle, win: &tauri::WebviewWindow) {
     if let Ok(Some(monitor)) = app.primary_monitor() {

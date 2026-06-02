@@ -236,8 +236,14 @@ export default function App() {
                     <span className="nav-n">{pad(i + 1)}</span>
                     <span className="nav-main">
                       <span className="nav-title-row">
-                        <span className="nav-text">{m.label}</span>
-                        {m.id === view ? <span className="nav-caret blink" /> : null}
+                        <span className="nav-text">
+                          {m.id === view ? (
+                            <Typewriter key={view} text={m.label} run={phase !== "closing"} speed={11} />
+                          ) : (
+                            m.label
+                          )}
+                        </span>
+                        {m.id === view ? <span className="nav-caret blink">█</span> : null}
                       </span>
                       <span className="nav-meta">{META[m.id]}</span>
                     </span>

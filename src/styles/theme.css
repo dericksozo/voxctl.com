@@ -336,9 +336,10 @@ button.mode-pill {
   gap: 7px;
 }
 .nav-caret {
-  width: 6px;
-  height: 6px;
-  background: var(--pink);
+  /* Full-block caret sized to the menu title — a blinking cursor, not a dot. */
+  color: var(--pink);
+  font-size: clamp(20px, 2.3vw, 27px);
+  line-height: 1;
   flex: none;
   display: inline-block;
 }
