@@ -11,6 +11,10 @@ use crate::commands::config::load_config;
 
 pub fn apply_shortcut(app: &AppHandle) {
     let gs = app.global_shortcut();
+
+    // Re-registering while a PTT key is held can orphan the old Released event.
+    // Stop first so shortcut churn cannot leave recording stuck on.
+    let _ = audio::stop(app);
     let _ = gs.unregister_all();
 
     let cfg = load_config(app);
