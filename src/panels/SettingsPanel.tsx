@@ -20,11 +20,13 @@ export function SettingsPanel({
   refreshApiKey,
   perms,
   refreshPerms,
+  recording,
 }: {
   apiKeySet: boolean;
   refreshApiKey: () => void;
   perms: PermissionStatus;
   refreshPerms: () => void;
+  recording: boolean;
 }) {
   const { config, set } = useConfig();
   const [keyDraft, setKeyDraft] = useState("");
@@ -37,6 +39,7 @@ export function SettingsPanel({
   }, [apiKeySet]);
 
   async function saveKey() {
+    if (recording) return;
     const k = keyDraft.trim();
     setSaving(true);
     setKeyErr(null);
@@ -68,6 +71,7 @@ export function SettingsPanel({
   // Notifications are OFF by default. Turning them ON triggers the macOS
   // permission prompt; only persist ON if the user actually grants it.
   async function toggleNotify() {
+    if (recording) return;
     if (config.notifyOnModeSwitch) {
       set("notifyOnModeSwitch", false);
       return;
@@ -78,6 +82,7 @@ export function SettingsPanel({
 
   return (
     <div className="panel-body settings">
+      {recording ? <div className="set-hint">RECORDING IN PROGRESS</div> : null}
       {permsMissing ? (
         <div className="set-row">
           <div className="set-label">
@@ -90,6 +95,7 @@ export function SettingsPanel({
               granted={perms.microphone}
               onAction={() => requestMicrophone().then(refreshPerms).catch(() => {})}
               onOpen={() => openPermissionSettings("microphone").catch(() => {})}
+              disabled={recording}
             />
             <PermCard
               name={t("perm.ax.name")}
@@ -97,10 +103,11 @@ export function SettingsPanel({
               granted={perms.accessibility}
               onAction={() => requestAccessibility().then(refreshPerms).catch(() => {})}
               onOpen={() => openPermissionSettings("accessibility").catch(() => {})}
+              disabled={recording}
             />
           </div>
           <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
-            <button type="button" className="pc-btn secondary" onClick={refreshPerms}>
+            <button type="button" className="pc-btn secondary" onClick={refreshPerms} disabled={recording}>
               ↻ {t("perm.recheck")}
             </button>
           </div>
@@ -115,6 +122,7 @@ export function SettingsPanel({
           <input
             className="key-input"
             value={keyDraft}
+            disabled={recording}
             onChange={(e) => {
               setKeyDraft(e.target.value);
               if (keyErr) setKeyErr(null);
@@ -123,7 +131,7 @@ export function SettingsPanel({
             spellCheck={false}
             placeholder={apiKeySet ? "•••••••••••••••• (stored)" : "sk-…"}
           />
-          <button type="button" className="key-eye" onClick={saveKey} disabled={saving}>
+          <button type="button" className="key-eye" onClick={saveKey} disabled={saving || recording}>
             {saving ? t("settings.validating") : t("settings.save")}
           </button>
           <span className={"set-ok" + (keyErr ? " bad" : apiKeySet ? "" : " bad")}>
@@ -141,7 +149,8 @@ export function SettingsPanel({
             { value: "toggle", label: t("settings.toggle") },
             { value: "ptt", label: t("settings.ptt") },
           ]}
-          onChange={(v) => set("captureMode", v)}
+          onChange={(v) => set("captureMode", v, { reloadShortcut: true })}
+          disabled={recording}
         />
         <div className="set-hint">
           {config.captureMode === "toggle" ? t("settings.captureHint.toggle") : t("settings.captureHint.ptt")}
@@ -151,7 +160,11 @@ export function SettingsPanel({
       <div className="set-grid">
         <div className="set-cell">
           <div className="set-label">{t("settings.shortcut")}</div>
-          <ShortcutRecorder value={config.shortcut} onChange={(s) => set("shortcut", s)} />
+          <ShortcutRecorder
+            value={config.shortcut}
+            onChange={(s) => set("shortcut", s, { reloadShortcut: true })}
+            disabled={recording}
+          />
         </div>
         <div className="set-cell">
           <div className="set-label">{t("settings.transcriptionLanguage")}</div>
@@ -159,6 +172,7 @@ export function SettingsPanel({
             className="set-select"
             value={config.defaultLanguage ?? "auto"}
             onChange={(e) => set("defaultLanguage", e.target.value === "auto" ? null : e.target.value)}
+            disabled={recording}
           >
             {LANGUAGES.map((l) => (
               <option key={l.code} value={l.code}>
@@ -172,7 +186,12 @@ export function SettingsPanel({
       <div className="set-grid">
         <div className="set-cell">
           <div className="set-label">{t("settings.appLanguage")}</div>
-          <select className="set-select" value={config.appLocale} onChange={(e) => set("appLocale", e.target.value)}>
+          <select
+            className="set-select"
+            value={config.appLocale}
+            onChange={(e) => set("appLocale", e.target.value)}
+            disabled={recording}
+          >
             {AVAILABLE_LOCALES.map((l) => (
               <option key={l.code} value={l.code}>
                 {l.label}
@@ -191,6 +210,7 @@ export function SettingsPanel({
           on={config.sfxEnabled}
           onToggle={() => set("sfxEnabled", !config.sfxEnabled)}
           labels={[t("settings.sfxOn"), t("settings.sfxOff")]}
+          disabled={recording}
         />
       </div>
 
@@ -202,6 +222,7 @@ export function SettingsPanel({
           on={config.copyToClipboard}
           onToggle={() => set("copyToClipboard", !config.copyToClipboard)}
           labels={[t("settings.on"), t("settings.off")]}
+          disabled={recording}
         />
       </div>
 
@@ -213,6 +234,7 @@ export function SettingsPanel({
           on={config.notifyOnModeSwitch}
           onToggle={toggleNotify}
           labels={[t("settings.on"), t("settings.off")]}
+          disabled={recording}
         />
       </div>
     </div>
@@ -225,12 +247,14 @@ function PermCard({
   granted,
   onAction,
   onOpen,
+  disabled = false,
 }: {
   name: string;
   desc: string;
   granted: boolean;
   onAction: () => void;
   onOpen: () => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="perm-card">
@@ -244,11 +268,11 @@ function PermCard({
         <div className="pc-desc">{desc}</div>
       </div>
       <div style={{ display: "flex", gap: 8 }}>
-        <button type="button" className="pc-btn secondary" onClick={onOpen}>
+        <button type="button" className="pc-btn secondary" onClick={onOpen} disabled={disabled}>
           {t("perm.open")}
         </button>
         {granted ? null : (
-          <button type="button" className="pc-btn" onClick={onAction}>
+          <button type="button" className="pc-btn" onClick={onAction} disabled={disabled}>
             {t("perm.grant")}
           </button>
         )}

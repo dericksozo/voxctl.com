@@ -172,6 +172,7 @@ export default function App() {
             refreshApiKey={refreshApiKey}
             perms={perms}
             refreshPerms={refreshPerms}
+            recording={recording}
           />
         );
       default:
