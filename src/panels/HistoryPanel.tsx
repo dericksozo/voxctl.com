@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { t } from "../i18n";
 import { langLabel, LANGUAGES } from "../lib/languages";
 import {
   deleteRecording,
   incrementCopy,
-  readAudio,
   retranscribe,
   toggleFavorite,
 } from "../lib/ipc";
@@ -33,7 +33,6 @@ const fmtCount = (n: number) => (n >= 10 ? "10+" : String(n));
 type ActiveAudio = {
   id: number;
   audio: HTMLAudioElement;
-  url: string;
 };
 
 export function HistoryPanel({
@@ -61,7 +60,6 @@ export function HistoryPanel({
       active.audio.pause();
       active.audio.removeAttribute("src");
       active.audio.load();
-      URL.revokeObjectURL(active.url);
       audioRef.current = null;
     }
     if (updateState) setPlaying(null);
@@ -101,15 +99,12 @@ export function HistoryPanel({
     const seq = playSeq.current;
     setPlaying(item.id);
     try {
-      const bytes = await readAudio(item.id);
-      if (seq !== playSeq.current) return;
-      const blob = new Blob([new Uint8Array(bytes)], { type: "audio/wav" });
-      const url = URL.createObjectURL(blob);
+      const url = convertFileSrc(item.audioPath);
       const a = new Audio(url);
-      audioRef.current = { id: item.id, audio: a, url };
+      a.preload = "metadata";
+      audioRef.current = { id: item.id, audio: a };
       a.onended = () => {
         if (seq !== playSeq.current) return;
-        URL.revokeObjectURL(url);
         audioRef.current = null;
         setPlaying(null);
       };
@@ -119,7 +114,6 @@ export function HistoryPanel({
       await a.play();
       if (seq !== playSeq.current) {
         a.pause();
-        URL.revokeObjectURL(url);
       }
     } catch (err) {
       console.error("playback failed", err);
