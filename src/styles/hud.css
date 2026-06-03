@@ -1,7 +1,12 @@
-/* Recording HUD overlay — transparent borderless window pinned bottom-center. */
+/* Recording HUD overlay — transparent borderless window pinned bottom-center.
+   Mirrors the main app's CRT aesthetic: a framed panel with a faint grid and
+   scanlines, corner brackets, the VOXCTL logo (pink chevron blinks), and a
+   square level meter. No text, no language picker. */
 :root {
   --pink: #f60092;
   --ink: #16191d;
+  --line: rgba(22, 25, 29, 0.15);
+  --line-soft: rgba(22, 25, 29, 0.07);
   --mono: "Share Tech Mono", monospace;
 }
 * {
@@ -25,91 +30,125 @@ body {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  padding-bottom: 14px;
+  padding-bottom: 6px;
 }
 
 .hud {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 10px 16px;
-  background: rgba(244, 245, 246, 0.92);
-  -webkit-backdrop-filter: blur(20px) saturate(150%);
-  backdrop-filter: blur(20px) saturate(150%);
-  border: 1px solid rgba(229, 0, 122, 0.5);
-  border-radius: 12px;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.22);
-  max-width: 90vw;
+  gap: 12px;
+  padding: 9px 16px;
+  background: rgba(244, 245, 246, 0.9);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid var(--line);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.18);
 }
-.hud-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--pink);
+/* faint grid background */
+.hud::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: linear-gradient(var(--line-soft) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+/* scanlines */
+.hud::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: repeating-linear-gradient(to bottom, rgba(22, 25, 29, 0.05) 0 1px, transparent 1px 3px);
+  mix-blend-mode: multiply;
+}
+.hud > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* corner brackets (ported from the app's .frame) */
+.ck {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  z-index: 3;
+}
+.ck.tl {
+  top: -1px;
+  left: -1px;
+  border-top: 2px solid var(--ink);
+  border-left: 2px solid var(--ink);
+}
+.ck.tr {
+  top: -1px;
+  right: -1px;
+  border-top: 2px solid var(--ink);
+  border-right: 2px solid var(--ink);
+}
+.ck.bl {
+  bottom: -1px;
+  left: -1px;
+  border-bottom: 2px solid var(--ink);
+  border-left: 2px solid var(--ink);
+}
+.ck.br {
+  bottom: -1px;
+  right: -1px;
+  border-bottom: 2px solid var(--ink);
+  border-right: 2px solid var(--ink);
+}
+
+/* logo — pink chevron blinks while recording */
+.logo-mark {
+  width: 26px;
+  height: 26px;
   flex: none;
-  animation: hud-pulse 1s ease-in-out infinite;
+  display: block;
 }
-.hud.transcribing .hud-dot {
-  animation: none;
-  background: var(--ink);
-  opacity: 0.35;
-}
-.hud.error {
-  border-color: rgba(255, 70, 70, 0.7);
-}
-.hud.error .hud-dot {
-  animation: none;
-  background: #ff4646;
-  opacity: 1;
-}
-.hud.error .hud-text {
-  color: #ff5a5a;
-}
-@keyframes hud-pulse {
+@keyframes blink {
   0%,
-  100% {
+  49% {
     opacity: 1;
   }
-  50% {
-    opacity: 0.3;
+  50%,
+  100% {
+    opacity: 0;
   }
 }
-.hud-meter {
-  display: block;
-  width: 96px;
-  height: 22px;
+/* Slow blink while recording... */
+.hud .logo-mark.recording .logo-pink {
+  animation: blink 1.4s step-end infinite;
 }
-.hud-text {
-  font-size: 12px;
-  letter-spacing: 0.03em;
-  color: var(--ink);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 40vw;
-  min-width: 80px;
+/* ...faster while the transcript is processing. */
+.hud.transcribing .logo-mark.recording .logo-pink {
+  animation: blink 0.45s step-end infinite;
 }
-.hud-text.dim {
-  color: #8c949b;
-  letter-spacing: 0.16em;
+
+/* square level meter (matches the app footer meter) */
+.blocks {
+  display: inline-flex;
+  gap: 3px;
 }
-.hud-lang {
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  color: var(--pink);
-  background: rgba(229, 0, 122, 0.08);
-  border: 1px solid rgba(229, 0, 122, 0.4);
-  border-radius: 7px;
-  padding: 5px 8px;
-  cursor: pointer;
+.blk {
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--line);
 }
-.hud-lang:focus {
-  outline: none;
+.blk.on {
+  background: var(--ink);
+  border-color: var(--ink);
 }
-.hud-hint {
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  color: #8c949b;
-  white-space: nowrap;
+.blk.on.accent {
+  background: var(--pink);
+  border-color: var(--pink);
+}
+
+/* error: quiet red accent on the frame, no text */
+.hud.error {
+  border-color: rgba(255, 70, 70, 0.7);
 }
