@@ -14,7 +14,7 @@ const KEY = "config";
 interface ConfigCtx {
   config: Config;
   ready: boolean;
-  set: <K extends keyof Config>(key: K, value: Config[K]) => void;
+  set: <K extends keyof Config>(key: K, value: Config[K], options?: { reloadShortcut?: boolean }) => void;
 }
 
 const Ctx = createContext<ConfigCtx | null>(null);
@@ -46,7 +46,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  function set<K extends keyof Config>(key: K, value: Config[K]) {
+  function set<K extends keyof Config>(key: K, value: Config[K], options?: { reloadShortcut?: boolean }) {
     setConfig((prev) => {
       const next = { ...prev, [key]: value };
       if (key === "appLocale") setLocale(value as string);
@@ -55,7 +55,9 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
         store
           .set(KEY, next)
           .then(() => store.save())
-          .then(() => reloadConfig().catch(() => {}))
+          .then(() => {
+            if (options?.reloadShortcut) return reloadConfig().catch(() => {});
+          })
           .catch((e) => console.error("config save failed", e));
       }
       return next;

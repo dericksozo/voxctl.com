@@ -62,14 +62,16 @@ export function Toggle({
   on,
   onToggle,
   labels,
+  disabled = false,
 }: {
   on: boolean;
   onToggle: () => void;
   labels?: [string, string];
+  disabled?: boolean;
 }) {
   const [a, b] = labels || ["ON", "OFF"];
   return (
-    <button type="button" className={"toggle" + (on ? " on" : "")} onClick={onToggle}>
+    <button type="button" className={"toggle" + (on ? " on" : "")} onClick={onToggle} disabled={disabled}>
       <span className="toggle-track">
         <span className="toggle-knob" />
       </span>
@@ -82,10 +84,12 @@ export function Segmented<T extends string>({
   value,
   options,
   onChange,
+  disabled = false,
 }: {
   value: T;
   options: { value: T; label: string }[];
   onChange: (v: T) => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="seg">
@@ -95,6 +99,7 @@ export function Segmented<T extends string>({
           key={o.value}
           className={"seg-opt" + (o.value === value ? " on" : "")}
           onClick={() => onChange(o.value)}
+          disabled={disabled}
         >
           {o.label}
         </button>

@@ -52,7 +52,15 @@ export function prettyAccel(accel: string): string {
     .join(" ");
 }
 
-export function ShortcutRecorder({ value, onChange }: { value: string; onChange: (accel: string) => void }) {
+export function ShortcutRecorder({
+  value,
+  onChange,
+  disabled = false,
+}: {
+  value: string;
+  onChange: (accel: string) => void;
+  disabled?: boolean;
+}) {
   const [recording, setRecording] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
 
@@ -91,12 +99,17 @@ export function ShortcutRecorder({ value, onChange }: { value: string; onChange:
     };
   }, [recording, onChange]);
 
+  useEffect(() => {
+    if (disabled) setRecording(false);
+  }, [disabled]);
+
   return (
     <button
       ref={btnRef}
       type="button"
       className={"kbd" + (recording ? " recording" : "")}
       onClick={() => setRecording((r) => !r)}
+      disabled={disabled}
     >
       {recording ? t("settings.shortcutRecord") : prettyAccel(value)}
     </button>

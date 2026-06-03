@@ -1153,6 +1153,24 @@ button.mode-pill {
   filter: brightness(1.05);
 }
 
+.key-input:disabled,
+.key-eye:disabled,
+.kbd:disabled,
+.set-select:disabled,
+.seg-opt:disabled,
+.toggle:disabled,
+.pc-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.key-eye:disabled:hover,
+.pc-btn:disabled:hover {
+  filter: none;
+  color: var(--gray);
+  border-color: var(--line);
+}
+
 /* ---------- error toast ---------- */
 .toast {
   position: fixed;
