@@ -32,9 +32,10 @@ env_logger = "0.11"
 # Secure storage of the OpenAI key in the macOS Keychain (never plaintext).
 keyring = { version = "3", features = ["apple-native"] }
 
-# Lightweight HTTPS for the zero-token API-key validation (GET /v1/models).
-# rustls only (no OpenSSL), reusing the existing TLS stack.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# Lightweight HTTPS for zero-cost API-key validation (GET /v1/models) and the
+# remote model-registry fetch (JSON). rustls only (no OpenSSL), reusing the
+# existing TLS stack.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 # Native microphone capture (CoreAudio on macOS) — stream only opens while recording.
 cpal = "0.15"

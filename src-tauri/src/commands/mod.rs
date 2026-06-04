@@ -7,4 +7,5 @@ pub mod history;
 pub mod inject;
 pub mod modes;
 pub mod permissions;
+pub mod registry;
 pub mod transcription;

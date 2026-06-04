@@ -16,11 +16,18 @@ import { EVT, type BackendError, type ModeChanged, type RecState } from "./lib/e
 import {
   getActiveMode,
   getPermissions,
-  hasApiKey,
+  getRegistry,
   listHistory,
   listModes,
+  providerStatus,
 } from "./lib/ipc";
 import type { HistoryItem, Mode, PermissionStatus } from "./lib/types";
+import {
+  anyKeyValidated,
+  EMPTY_PROVIDER_STATUS,
+  type ProviderStatus,
+  type Registry,
+} from "./lib/registry";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -41,7 +48,8 @@ export default function App() {
   const [modes, setModes] = useState<Mode[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [activeMode, setActiveMode] = useState<Mode | null>(null);
-  const [apiKeySet, setApiKeySet] = useState(false);
+  const [registry, setRegistry] = useState<Registry | null>(null);
+  const [providers, setProviders] = useState<ProviderStatus>(EMPTY_PROVIDER_STATUS);
   const [perms, setPerms] = useState<PermissionStatus>({ microphone: true, accessibility: true });
   const [toast, setToast] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
@@ -55,8 +63,8 @@ export default function App() {
   const refreshHistory = useCallback(() => {
     listHistory().then(setHistory).catch(() => {});
   }, []);
-  const refreshApiKey = useCallback(() => {
-    hasApiKey().then(setApiKeySet).catch(() => {});
+  const refreshProviders = useCallback(() => {
+    providerStatus().then(setProviders).catch(() => {});
   }, []);
   const refreshPerms = useCallback(() => {
     getPermissions().then(setPerms).catch(() => {});
@@ -65,9 +73,12 @@ export default function App() {
   useEffect(() => {
     refreshModes();
     refreshHistory();
-    refreshApiKey();
+    refreshProviders();
     refreshPerms();
-  }, [refreshModes, refreshHistory, refreshApiKey, refreshPerms]);
+    getRegistry().then(setRegistry).catch(() => {});
+  }, [refreshModes, refreshHistory, refreshProviders, refreshPerms]);
+
+  const apiKeySet = anyKeyValidated(providers);
 
   useTauriEvent<RecState>(EVT.recState, (e) => setRecording(e.recording));
   useTauriEvent<ModeChanged>(EVT.modeChanged, () => refreshModes());
@@ -168,8 +179,9 @@ export default function App() {
       case "settings":
         return (
           <SettingsPanel
-            apiKeySet={apiKeySet}
-            refreshApiKey={refreshApiKey}
+            registry={registry}
+            providers={providers}
+            refreshProviders={refreshProviders}
             perms={perms}
             refreshPerms={refreshPerms}
             recording={recording}
