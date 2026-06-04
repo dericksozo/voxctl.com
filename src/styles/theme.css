@@ -78,6 +78,10 @@ button {
   display: flex;
   align-items: center;
   gap: 20px;
+  /* Sit above .main (z-index 2 via `.app > *`) so the ACTIVE MODE dropdown,
+     which lives in the header, paints over the content panels below it. */
+  position: relative;
+  z-index: 30;
 }
 .head-crumb {
   font-size: clamp(10px, 1.1vw, 12px);
