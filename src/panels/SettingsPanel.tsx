@@ -239,7 +239,6 @@ function ProviderRow({
       if (k) await setApiKey(provider.id as ProviderId, k);
       else await deleteApiKey(provider.id as ProviderId);
       setDraft("");
-      onChanged();
     } catch (e) {
       const msg = String(e);
       setErr(
@@ -251,14 +250,21 @@ function ProviderRow({
       );
     } finally {
       setSaving(false);
+      // Re-read the true backend status after EVERY attempt (not just success):
+      // an invalid key clears any stored key, so the row + header must update.
+      onChanged();
     }
   }
 
+  // Error (just-rejected key) takes visual priority over the stored state, so a
+  // bad entry never keeps looking validated.
+  const rowState = err ? "err" : validated ? "ok" : "none";
+
   return (
-    <div className={"prov-row" + (validated ? " ok" : "")}>
+    <div className={"prov-row " + rowState}>
       <div className="prov-head">
         <span className="prov-name">
-          <span className={"prov-dot " + (validated ? "on" : "off")} />
+          <span className={"prov-dot " + (err ? "err" : validated ? "on" : "off")} />
           {provider.label}
         </span>
         {defaultModel ? (
@@ -290,7 +296,7 @@ function ProviderRow({
         <button type="button" className="key-eye" onClick={save} disabled={saving || recording}>
           {saving ? t("settings.validating") : t("settings.save")}
         </button>
-        <span className={"set-ok" + (err ? " bad" : validated ? "" : " bad")}>
+        <span className={"set-ok" + (err ? " err" : validated ? "" : " bad")}>
           {err ? "✕ " + err : validated ? "✓ " + t("settings.valid") : t("settings.invalid")}
         </span>
       </div>
