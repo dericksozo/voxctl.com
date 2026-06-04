@@ -4,12 +4,14 @@
 mod audio_pipeline;
 mod commands;
 mod events;
+mod file_transcribe;
 mod history;
 mod hud;
 mod lang_detect;
 mod platform;
 mod registry;
 mod resample;
+mod retry;
 mod shortcut;
 mod transcription;
 
@@ -86,6 +88,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(RecorderState::default())
         .manage(commands::modes::ActiveModeState::default())
+        .manage(retry::RetryState::default())
         .setup(|app| {
             app.manage(history::init(app.handle())?);
             // Move any pre-multi-provider OpenAI key to its per-provider account.
@@ -101,6 +104,10 @@ pub fn run() {
             platform::macos::observe_app_switches(move || {
                 commands::modes::refresh_active_mode(&handle);
             });
+
+            // Retry failed transcriptions in the background (and reconcile any
+            // rows interrupted mid-transcription on a previous run).
+            retry::spawn(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {

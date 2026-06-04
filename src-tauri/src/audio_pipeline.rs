@@ -1,22 +1,30 @@
-//! Orchestration invoked when a recording stops: resample for persistence,
-//! collect the live transcript, inject, and save to history. Runs off the
+//! Orchestration invoked when a recording stops. The cardinal rule: ALWAYS
+//! persist the WAV + a history row BEFORE transcription is attempted, so a
+//! network error can never lose a recording. The active mode's model decides
+//! the path — a live OpenAI session is finished here; every other model is
+//! transcribed from the saved WAV via its provider's file API. Runs off the
 //! UI/audio threads on the async runtime.
 
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::commands::audio::RecordingContext;
 use crate::commands::config;
 use crate::events::{self, BackendError, TranscriptText};
-use crate::history;
+use crate::file_transcribe;
+use crate::history::{self, HistoryDb};
 use crate::hud;
+use crate::registry;
 use crate::resample;
 use crate::transcription::RealtimeSession;
 
+/// Sentinel error meaning "no API key for this provider" (vs a transient
+/// network/API failure), so failures route to the right history state.
+const NO_KEY: &str = "no_api_key";
+
 /// Called with the raw mono f32 samples at the device input rate, plus the live
-/// transcription session opened at record-start (None when there was no API
-/// key). Uses only the live transcript assembled from manually committed chunks.
-/// Full-buffer retranscription is user-triggered from History only. The WAV is
-/// always saved.
+/// transcription session opened at record-start (Some only for live streaming
+/// models). The WAV + a `transcribing` row are persisted first; transcription
+/// then runs and updates the row.
 pub fn on_recording_finished(
     app: &AppHandle,
     samples: Vec<f32>,
@@ -27,128 +35,156 @@ pub fn on_recording_finished(
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let pcm16 = resample::resample_to_pcm16_24k(&samples, rate);
+        let lang_label = ctx.language.clone().unwrap_or_else(|| "auto".into());
+        let mode_name = ctx.mode_name.clone().unwrap_or_else(|| "—".into());
 
-        let transcript = match session {
-            Some(session) => live_transcript_or_error(&app, session.finish().await),
-            None => {
-                emit_no_api_key_error(&app);
-                String::new()
+        // Persist BEFORE transcription. Never lose a recording to a network error.
+        let (id, path) = match history::insert_pending(
+            &app,
+            &pcm16,
+            &lang_label,
+            &mode_name,
+            ctx.app_name.as_deref(),
+            ctx.website.as_deref(),
+            &ctx.model_id,
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("failed to persist recording: {e}");
+                hud::hide_hud(&app);
+                return;
             }
         };
+        let _ = app.emit(events::HISTORY_CHANGED, ());
 
-        finalize(&app, &pcm16, &transcript, &ctx);
+        // Transcribe: a live session is already streaming (finish it); every
+        // other model transcribes the saved WAV via its provider's file API.
+        let result = match session {
+            Some(session) => session.finish().await,
+            None => transcribe_file(&app, &ctx, &path).await,
+        };
+
+        finalize(&app, id, &ctx, result);
     });
 }
 
-fn live_transcript_or_error(app: &AppHandle, result: Result<String, String>) -> String {
+/// Transcribe the saved WAV through the active mode's model + capability options.
+async fn transcribe_file(
+    app: &AppHandle,
+    ctx: &RecordingContext,
+    path: &str,
+) -> Result<String, String> {
+    let reg = registry::effective(app);
+    let model = reg
+        .model_by_id(&ctx.model_id)
+        .ok_or_else(|| format!("unknown model {}", ctx.model_id))?;
+    let key = config::get_api_key(&model.provider).ok_or_else(|| NO_KEY.to_string())?;
+    let transcriber = file_transcribe::file_transcriber_for(model, key)
+        .ok_or_else(|| format!("no file transcriber for {}", model.provider))?;
+    let wav = std::fs::read(path).map_err(|e| format!("read wav: {e}"))?;
+    transcriber.transcribe_file(&wav, &ctx.options).await
+}
+
+/// Record the transcription outcome on the row, deliver the text, and settle the
+/// HUD. Always leaves the row in a coherent state (done/failed/needs_transcription).
+fn finalize(app: &AppHandle, id: i64, ctx: &RecordingContext, result: Result<String, String>) {
+    let db = app.state::<HistoryDb>();
     match result {
-        Ok(text) => {
-            log::info!("final transcript (streamed): {} chars", text.len());
+        Ok(text) if !text.trim().is_empty() => {
+            let language = crate::lang_detect::resolve(ctx.language.as_deref(), &text);
+            history::update_result(&db, id, &text, &language, "done");
+            log::info!("transcript (id {id}): {} chars", text.len());
             let _ = app.emit(
                 events::TRANSCRIPT_FINAL,
                 TranscriptText { text: text.clone() },
             );
-            text
-        }
-        Err(e) => {
-            log::error!("live transcription failed: {e}");
-            let _ = app.emit(events::ERROR, BackendError::new("transcription", e));
-            String::new()
-        }
-    }
-}
-
-fn emit_no_api_key_error(app: &AppHandle) {
-    log::warn!("no API key set; skipping transcription");
-    let _ = app.emit(
-        events::ERROR,
-        BackendError::new(
-            "transcription",
-            "No OpenAI API key set. Add one in Settings.",
-        ),
-    );
-}
-
-/// Inject the final transcript into the frontmost app (clipboard untouched
-/// unless the user enabled the copy toggle), then persist to history. Always
-/// hides the HUD; ALWAYS saves so a recording is never lost (brief §3).
-fn finalize(app: &AppHandle, pcm16: &[i16], transcript: &str, ctx: &RecordingContext) {
-    let trimmed = transcript.trim();
-    // An empty transcript means transcription failed (an error was already
-    // emitted) or there was no speech; either way the HUD should linger briefly.
-    let mut had_error = trimmed.is_empty();
-    if !trimmed.is_empty() {
-        let cfg = config::load_config(app);
-
-        // Clipboard toggle (brief §4): OFF = never touch it; ON = overwrite.
-        if cfg.copy_to_clipboard {
-            use tauri_plugin_clipboard_manager::ClipboardExt;
-            if let Err(e) = app.clipboard().write_text(transcript.to_string()) {
-                log::error!("clipboard write failed: {e}");
-            }
-        }
-
-        // CGEvent injection requires Accessibility; surface a clear error if missing.
-        if crate::platform::macos::accessibility_trusted() {
-            if let Err(e) = crate::commands::inject::insert_text(transcript) {
-                log::error!("injection failed: {e}");
-                had_error = true;
-                let _ = app.emit(events::ERROR, BackendError::new("inject", e));
-            }
-        } else {
-            log::warn!("accessibility not granted; skipping injection");
-            had_error = true;
-            let _ = app.emit(
-                events::ERROR,
-                BackendError::new(
-                    "inject",
-                    "Accessibility permission needed to insert text. Grant it in Settings, then open History to copy.",
-                ),
-            );
-        }
-    }
-
-    // Always save (even empty transcript / on failure) so nothing is lost.
-    // For "auto" recordings, resolve the actual detected language so the history
-    // chip shows e.g. "en"/"ja" rather than the literal "auto" selection label.
-    let language = crate::lang_detect::resolve(ctx.language.as_deref(), transcript);
-    let mode_name = ctx.mode_name.as_deref().unwrap_or("—");
-    match history::save(
-        app,
-        pcm16,
-        transcript,
-        &language,
-        mode_name,
-        ctx.app_name.as_deref(),
-        ctx.website.as_deref(),
-    ) {
-        Ok(id) => {
-            log::info!("saved recording #{id}");
+            let delivered = deliver(app, &text);
             let _ = app.emit(events::HISTORY_CHANGED, ());
+            if delivered {
+                hud::hide_hud(app);
+            } else {
+                hide_after_delay(app);
+            }
         }
-        Err(e) => log::error!("failed to save recording: {e}"),
-    }
-
-    // On success, hide immediately. On failure, keep the quiet HUD ERROR status
-    // up for a moment so the user notices, then hide it.
-    if had_error {
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(2200)).await;
-            hud::hide_hud(&app);
-        });
-    } else {
-        hud::hide_hud(app);
+        Ok(_) => {
+            // Completed with no speech — a valid, done recording (empty text).
+            let language = ctx.language.clone().unwrap_or_else(|| "auto".into());
+            history::update_result(&db, id, "", &language, "done");
+            let _ = app.emit(events::HISTORY_CHANGED, ());
+            hud::hide_hud(app);
+        }
+        Err(e) => handle_failure(app, id, ctx, &e),
     }
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn normal_recording_has_no_batch_transcription_fallback() {
-        let source = include_str!("audio_pipeline.rs");
-        assert!(!source.contains(concat!("batch", "_transcribe")));
-        assert!(!source.contains(concat!("OpenAi", "RealtimeTranscriber")));
-        assert!(source.contains("Full-buffer retranscription is user-triggered from History only"));
+/// Deliver the transcript: copy to clipboard if enabled, paste into the focused
+/// field when Accessibility is granted. Returns false when delivery hit a
+/// problem worth keeping the HUD error visible briefly.
+fn deliver(app: &AppHandle, text: &str) -> bool {
+    let cfg = config::load_config(app);
+    if cfg.copy_to_clipboard {
+        use tauri_plugin_clipboard_manager::ClipboardExt;
+        if let Err(e) = app.clipboard().write_text(text.to_string()) {
+            log::error!("clipboard write failed: {e}");
+        }
     }
+    if crate::platform::macos::accessibility_trusted() {
+        match crate::commands::inject::insert_text(text) {
+            Ok(()) => true,
+            Err(e) => {
+                log::error!("injection failed: {e}");
+                let _ = app.emit(events::ERROR, BackendError::new("inject", e));
+                false
+            }
+        }
+    } else {
+        log::warn!("accessibility not granted; skipping injection");
+        let _ = app.emit(
+            events::ERROR,
+            BackendError::new(
+                "inject",
+                "Accessibility permission needed to insert text. Grant it in Settings, then open History to copy.",
+            ),
+        );
+        false
+    }
+}
+
+/// Route a failed transcription to the right state: `needs_transcription` when
+/// there's no key or the model can't re-process a file (live-only), else
+/// `failed` (the retry worker will retry these).
+fn handle_failure(app: &AppHandle, id: i64, ctx: &RecordingContext, err: &str) {
+    let db = app.state::<HistoryDb>();
+    let reg = registry::effective(app);
+    let file_capable = reg
+        .model_by_id(&ctx.model_id)
+        .map(|m| m.can_file)
+        .unwrap_or(false);
+    let no_key = err == NO_KEY;
+    let status = if no_key || !file_capable {
+        "needs_transcription"
+    } else {
+        "failed"
+    };
+    history::set_status(&db, id, status);
+
+    let msg = if no_key {
+        "No API key for this mode's provider. Add one in Settings, then re-run from History."
+            .to_string()
+    } else {
+        format!("Transcription failed: {err}")
+    };
+    log::error!("transcription failed (id {id}, status {status}): {err}");
+    let _ = app.emit(events::ERROR, BackendError::new("transcription", msg));
+    let _ = app.emit(events::HISTORY_CHANGED, ());
+    hide_after_delay(app);
+}
+
+/// Keep the quiet HUD error status up for a moment so the user notices, then hide.
+fn hide_after_delay(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(2200)).await;
+        hud::hide_hud(&app);
+    });
 }

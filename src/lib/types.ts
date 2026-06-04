@@ -57,6 +57,9 @@ export interface ActiveMode {
   reason: ActiveReason;
 }
 
+/** Lifecycle of a recording's transcription. */
+export type RecordingStatus = "transcribing" | "done" | "failed" | "needs_transcription";
+
 export interface HistoryItem {
   id: number;
   /** Unix milliseconds. */
@@ -72,6 +75,9 @@ export interface HistoryItem {
   copyCount: number;
   /** Absolute path to the stored WAV (read via a Rust command for playback). */
   audioPath: string;
+  status: RecordingStatus;
+  /** Registry model id used for this recording (drives cost + re-run). */
+  modelId: string;
 }
 
 export interface PermissionStatus {

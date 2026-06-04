@@ -30,6 +30,35 @@ const timeLabel = (ts: number) => {
 const durLabel = (s: number) => `${Math.floor(s / 60)}:${pad(Math.round(s % 60))}`;
 const fmtCount = (n: number) => (n >= 10 ? "10+" : String(n));
 
+/** A chip describing a non-done transcription state, or null when done. */
+function statusChip(status: string): { label: string; cls: string } | null {
+  switch (status) {
+    case "transcribing":
+      return { label: "⋯ " + t("history.statusTranscribing"), cls: " busy" };
+    case "failed":
+      return { label: "✕ " + t("history.statusFailed"), cls: " err" };
+    case "needs_transcription":
+      return { label: "⚠ " + t("history.statusNeeds"), cls: " err" };
+    default:
+      return null;
+  }
+}
+
+/** Transcript text, or a state placeholder when there isn't one yet. */
+function previewText(item: HistoryItem): string {
+  if (item.transcript?.trim()) return item.transcript;
+  switch (item.status) {
+    case "transcribing":
+      return t("history.transcribing");
+    case "failed":
+      return t("history.failed");
+    case "needs_transcription":
+      return t("history.needsTranscription");
+    default:
+      return "—";
+  }
+}
+
 type ActiveAudio = {
   id: number;
   audio: HTMLAudioElement;
@@ -180,6 +209,7 @@ export function HistoryPanel({
             const exp = expanded === item.id;
             const cp = copied === item.id;
             const ctx = item.appName || item.website;
+            const sc = statusChip(item.status);
             return (
               <div
                 key={item.id}
@@ -192,6 +222,7 @@ export function HistoryPanel({
                     {item.favorite ? <span className="mode-badge">★</span> : null}
                   </div>
                   <div style={{ display: "flex", gap: 6 }}>
+                    {sc ? <span className={"file-chip" + sc.cls}>{sc.label}</span> : null}
                     {item.modeName && item.modeName !== "—" ? (
                       <span className="file-chip mode">▸ {item.modeName.toUpperCase()}</span>
                     ) : null}
@@ -199,7 +230,9 @@ export function HistoryPanel({
                     <span className="file-chip">{langLabel(item.language)}</span>
                   </div>
                 </div>
-                <p className="file-preview">{item.transcript || "—"}</p>
+                <p className={"file-preview" + (item.transcript?.trim() ? "" : " placeholder")}>
+                  {previewText(item)}
+                </p>
                 <div className="file-foot">
                   <div className="file-actions">
                     <button type="button" className={"fa" + (cp ? " copied" : "")} onClick={(e) => doCopy(e, item)}>
