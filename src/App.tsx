@@ -244,7 +244,9 @@ export default function App() {
                             m.label
                           )}
                         </span>
-                        {m.id === view ? <span className="nav-caret blink">█</span> : null}
+                        <span className="nav-caret blink" aria-hidden="true">
+                          █
+                        </span>
                       </span>
                       <span className="nav-meta">{META[m.id]}</span>
                     </span>
