@@ -9,6 +9,7 @@ import {
   costLabel,
   modelBadge,
   modelById,
+  type ModelRecord,
   modelsForProvider,
   providerValidated,
   type ProviderStatus,
@@ -202,6 +203,18 @@ function ModeForm({
   const selModel = modelById(registry, m.model);
   const caps = selModel ? CAP_FIELDS.filter((c) => selModel.capabilities[c.key]) : [];
 
+  // Selecting a model resets fields the new model doesn't support, so we never
+  // persist (or send) a language/keywords a model ignores.
+  function selectModel(id: string) {
+    const mod = modelById(registry, id);
+    setM((s) => ({
+      ...s,
+      model: id,
+      language: mod?.supportsLanguage ? s.language : "auto",
+      keywords: mod?.supportsKeywords ? s.keywords : [],
+    }));
+  }
+
   return (
     <div className="panel-body modes-new">
       <div className="nm-head">
@@ -226,10 +239,12 @@ function ModeForm({
           registry={registry}
           providers={providers}
           selected={m.model}
-          onSelect={(id) => set("model", id)}
+          onSelect={selectModel}
           go={go}
         />
       </div>
+
+      {selModel ? <ModelInfo model={selModel} /> : null}
 
       {caps.length > 0 ? (
         <div className="nm-field">
@@ -275,7 +290,8 @@ function ModeForm({
           />
         </div>
       </div>
-      <div className="nm-grid">
+      {/* Language and keywords only show for models that honor them. */}
+      {selModel?.supportsLanguage ? (
         <div className="nm-field">
           <label>{t("modes.field.language")}</label>
           <select className="set-select" value={m.language} onChange={(e) => set("language", e.target.value)}>
@@ -286,21 +302,53 @@ function ModeForm({
             ))}
           </select>
         </div>
+      ) : null}
+      {selModel?.supportsKeywords ? (
         <div className="nm-field">
           <label>
             {t("modes.field.keywords")} <span>{t("modes.field.keywordsHint")}</span>
           </label>
           <input
+            key={m.model}
             className="key-input"
             defaultValue={csv(m.keywords)}
             placeholder="VOXCTL, Tauri, cpal"
             onChange={(e) => set("keywords", parseCsv(e.target.value))}
           />
         </div>
-      </div>
+      ) : null}
       <button type="button" className="nm-save" onClick={() => onSave(m)}>
         ✓ {t("modes.save")}
       </button>
+    </div>
+  );
+}
+
+/** Expanded detail for the currently selected model: what it is, when to use
+ *  it, accuracy/speed, and price. The teaching surface for the one place a user
+ *  picks a model. */
+function ModelInfo({ model }: { model: ModelRecord }) {
+  return (
+    <div className="model-info">
+      <div className="mi-head">
+        <span className="mi-name">{model.label}</span>
+        <span className="mp-badge">{modelBadge(model)}</span>
+        <span className="mi-cost">{costLabel(model)}</span>
+      </div>
+      {model.description ? <div className="mi-desc">{model.description}</div> : null}
+      <div className="mi-stats">
+        {model.accuracy ? (
+          <span>
+            <span className="mi-k">{t("modes.accuracy")}</span> {model.accuracy}
+          </span>
+        ) : null}
+        {model.speed ? (
+          <span>
+            <span className="mi-k">{t("modes.speed")}</span> {model.speed}
+          </span>
+        ) : null}
+      </div>
+      {model.useCase ? <div className="mi-use">↳ {model.useCase}</div> : null}
     </div>
   );
 }
@@ -352,9 +400,14 @@ function ModelPicker({
                   onClick={() => onSelect(mod.id)}
                 >
                   <span className="mp-radio">{isSel ? "●" : "○"}</span>
-                  <span className="mp-name">{mod.label}</span>
-                  <span className="mp-badge">{modelBadge(mod)}</span>
-                  <span className="mp-cost">{costLabel(mod)}</span>
+                  <span className="mp-main">
+                    <span className="mp-name-row">
+                      <span className="mp-name">{mod.label}</span>
+                      <span className="mp-badge">{modelBadge(mod)}</span>
+                      <span className="mp-cost">{costLabel(mod)}</span>
+                    </span>
+                    {mod.description ? <span className="mp-desc">{mod.description}</span> : null}
+                  </span>
                 </button>
               );
             })}
