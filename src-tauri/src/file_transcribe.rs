@@ -321,7 +321,7 @@ mod tests {
         let opts = TranscribeOptions::default();
         for (model_id, var) in [
             ("gpt-4o-transcribe", "VOXCTL_TEST_OPENAI_KEY"),
-            ("grok-stt", "VOXCTL_TEST_XAI_KEY"),
+            ("grok-stt-file", "VOXCTL_TEST_XAI_KEY"),
             ("gemini-2.5-flash", "VOXCTL_TEST_GEMINI_KEY"),
         ] {
             let Ok(key) = std::env::var(var) else {

@@ -83,6 +83,16 @@ pub struct RealtimeSession {
 }
 
 impl RealtimeSession {
+    /// Construct a session from raw channel ends. Lets other providers' live
+    /// transcribers (e.g. xAI's WebSocket task in `xai_live`) reuse the same
+    /// handle the audio pipeline already drives.
+    pub(crate) fn from_parts(
+        audio_tx: mpsc::UnboundedSender<Vec<i16>>,
+        done_rx: oneshot::Receiver<Result<String, String>>,
+    ) -> Self {
+        Self { audio_tx, done_rx }
+    }
+
     /// A cloneable sender for pushing 24 kHz mono PCM16 chunks into the session.
     /// While any sender is alive the session keeps accepting audio; when the last
     /// one drops, the background task commits and finalizes.

@@ -219,6 +219,15 @@ fn finish_capture(mut cap: Capture) -> (Vec<f32>, u32) {
     (samples, cap.sample_rate)
 }
 
+/// A delta callback that forwards the running transcript to the HUD preview.
+/// Shared by the OpenAI and xAI live-session openers.
+fn delta_emitter(app: &AppHandle) -> impl Fn(String) + Send + Sync + 'static {
+    let app = app.clone();
+    move |text: String| {
+        let _ = app.emit(events::TRANSCRIPT_PARTIAL, events::TranscriptText { text });
+    }
+}
+
 pub fn start(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<RecorderState>();
     let override_lang = {
@@ -234,37 +243,41 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
     let language = ctx.language.clone();
 
     // Decide the transcription path from the active mode's model. Live-capable
-    // OpenAI models stream while recording (lowest latency); every other model
-    // is transcribed from the saved WAV on stop (see audio_pipeline). Audio is
-    // buffered locally for the WAV regardless of which path runs.
+    // models stream while recording (lowest latency) — OpenAI realtime and xAI
+    // Grok STT (WebSocket); every other model is transcribed from the saved WAV
+    // on stop (see audio_pipeline). Audio is buffered locally for the WAV
+    // regardless of which path runs.
     let reg = crate::registry::effective(app);
     let model = reg.model_by_id(&ctx.model_id);
-    let live_stream = model
-        .map(|m| m.can_live && m.provider == "openai")
-        .unwrap_or(false);
-    let live_key = if live_stream {
-        crate::commands::config::get_api_key("openai")
+    let provider = model.map(|m| m.provider.clone());
+    let can_live = model.map(|m| m.can_live).unwrap_or(false);
+    let live_key = if can_live {
+        provider
+            .as_deref()
+            .and_then(crate::commands::config::get_api_key)
     } else {
         None
     };
 
-    let session_bits = match live_key {
-        Some(key) => {
-            let app_delta = app.clone();
-            let session = OpenAiRealtimeTranscriber::open_session(
-                key,
-                ctx.options.language.clone(),
-                move |text: String| {
-                    let _ =
-                        app_delta.emit(events::TRANSCRIPT_PARTIAL, events::TranscriptText { text });
-                },
-            );
-            let pcm_tx = session.sender();
-            let (raw_tx, raw_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
-            Some((session, raw_tx, raw_rx, pcm_tx))
-        }
-        None => None,
+    let session = match (provider.as_deref(), live_key) {
+        (Some("openai"), Some(key)) => Some(OpenAiRealtimeTranscriber::open_session(
+            key,
+            ctx.options.language.clone(),
+            delta_emitter(app),
+        )),
+        (Some("xai"), Some(key)) => Some(crate::xai_live::open_session(
+            key,
+            ctx.options.clone(),
+            delta_emitter(app),
+        )),
+        _ => None,
     };
+
+    let session_bits = session.map(|session| {
+        let pcm_tx = session.sender();
+        let (raw_tx, raw_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
+        (session, raw_tx, raw_rx, pcm_tx)
+    });
 
     let capture_raw_tx = session_bits
         .as_ref()

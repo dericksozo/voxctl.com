@@ -14,6 +14,7 @@ mod resample;
 mod retry;
 mod shortcut;
 mod transcription;
+mod xai_live;
 
 use tauri::{
     image::Image,

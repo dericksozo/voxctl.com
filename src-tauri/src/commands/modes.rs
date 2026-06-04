@@ -108,20 +108,37 @@ fn valid_model_ids(app: &AppHandle) -> Vec<String> {
         .collect()
 }
 
-/// Repair a mode whose model id the registry no longer knows: fall back to the
-/// global default (or, failing that, the first registry model). Other models are
-/// left untouched — the registry, not this function, decides what's selectable.
-fn normalize_mode(mut mode: Mode, valid_ids: &[String]) -> Mode {
-    if !valid_ids.iter().any(|id| id == &mode.model) {
-        mode.model = if valid_ids.iter().any(|id| id == DEFAULT_MODEL) {
-            DEFAULT_MODEL.to_string()
-        } else {
-            valid_ids
-                .first()
-                .cloned()
-                .unwrap_or_else(|| DEFAULT_MODEL.to_string())
-        };
+/// Map a renamed/retired model id to its replacement (e.g. the old combined
+/// `grok-stt` split into file/live variants).
+fn alias_model(id: &str) -> Option<&'static str> {
+    match id {
+        "grok-stt" => Some("grok-stt-file"),
+        _ => None,
     }
+}
+
+/// Repair a mode whose model id the registry no longer knows: apply a rename
+/// alias if there is one, else fall back to the global default (or the first
+/// registry model). Known models are left untouched — the registry, not this
+/// function, decides what's selectable.
+fn normalize_mode(mut mode: Mode, valid_ids: &[String]) -> Mode {
+    if valid_ids.iter().any(|id| id == &mode.model) {
+        return mode;
+    }
+    if let Some(aliased) = alias_model(&mode.model) {
+        if valid_ids.iter().any(|id| id == aliased) {
+            mode.model = aliased.to_string();
+            return mode;
+        }
+    }
+    mode.model = if valid_ids.iter().any(|id| id == DEFAULT_MODEL) {
+        DEFAULT_MODEL.to_string()
+    } else {
+        valid_ids
+            .first()
+            .cloned()
+            .unwrap_or_else(|| DEFAULT_MODEL.to_string())
+    };
     mode
 }
 
@@ -623,5 +640,16 @@ mod tests {
         m.model = "whisper-1".into();
         let valid = vec!["gpt-realtime-whisper".to_string(), "whisper-1".to_string()];
         assert_eq!(normalize_mode(m, &valid).model, "whisper-1");
+    }
+
+    #[test]
+    fn renamed_model_maps_to_alias() {
+        let mut m = mode("m", &[], &[], true);
+        m.model = "grok-stt".into();
+        let valid = vec![
+            "gpt-realtime-whisper".to_string(),
+            "grok-stt-file".to_string(),
+        ];
+        assert_eq!(normalize_mode(m, &valid).model, "grok-stt-file");
     }
 }

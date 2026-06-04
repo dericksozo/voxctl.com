@@ -213,15 +213,17 @@ mod tests {
         let w = reg.model_by_id("whisper-1").unwrap();
         assert!(w.capabilities.word_timestamps);
         assert!(!w.capabilities.diarization);
-        // grok-stt declares the full set and does both live + file.
-        let g = reg.model_by_id("grok-stt").unwrap();
-        assert!(g.can_live && g.can_file);
+        // The xAI STT file variant declares the full set; live drops ITN.
+        let g = reg.model_by_id("grok-stt-file").unwrap();
+        assert!(g.can_file && !g.can_live);
         assert!(
             g.capabilities.diarization
                 && g.capabilities.multichannel
                 && g.capabilities.inverse_text_normalization
                 && g.capabilities.word_timestamps
         );
+        let gl = reg.model_by_id("grok-stt-live").unwrap();
+        assert!(gl.can_live && !gl.can_file && !gl.capabilities.inverse_text_normalization);
         // gpt-4o-transcribe declares none.
         let t = reg.model_by_id("gpt-4o-transcribe").unwrap();
         assert!(
@@ -243,7 +245,7 @@ mod tests {
         // File models accept a language hint and keyword steering.
         let f = reg.model_by_id("gpt-4o-transcribe").unwrap();
         assert!(f.supports_language && f.supports_keywords);
-        let g = reg.model_by_id("grok-stt").unwrap();
+        let g = reg.model_by_id("grok-stt-file").unwrap();
         assert!(g.supports_language && g.supports_keywords);
     }
 
