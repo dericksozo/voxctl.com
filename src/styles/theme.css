@@ -8,6 +8,7 @@
   --line: rgba(22, 25, 29, 0.15);
   --line-soft: rgba(22, 25, 29, 0.07);
   --pink: #f60092;
+  --danger: #ff3b30;
   --mono: "Share Tech Mono", "Space Mono", monospace;
   --head: "Orbitron", sans-serif;
 }
@@ -981,6 +982,9 @@ button.mode-pill {
 .set-ok.bad {
   color: var(--gray);
 }
+.set-ok.err {
+  color: var(--danger);
+}
 .set-hint {
   font-size: 11px;
   letter-spacing: 0.06em;
@@ -1002,6 +1006,9 @@ button.mode-pill {
 }
 .prov-row.ok {
   border-color: var(--pink);
+}
+.prov-row.err {
+  border-color: var(--danger);
 }
 .prov-head {
   display: flex;
@@ -1027,6 +1034,9 @@ button.mode-pill {
 }
 .prov-dot.off {
   background: var(--line);
+}
+.prov-dot.err {
+  background: var(--danger);
 }
 .prov-model {
   font-size: 11px;

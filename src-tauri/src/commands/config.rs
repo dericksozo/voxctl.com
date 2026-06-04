@@ -170,15 +170,35 @@ async fn validate(provider: &str, key: &str) -> Result<(), String> {
     }
 }
 
+/// Remove a provider's stored key, treating "no key present" as success.
+fn clear_key(provider: &str) {
+    if let Ok(en) = entry(provider) {
+        match en.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {}
+            Err(e) => log::warn!("failed clearing {provider} key: {e}"),
+        }
+    }
+}
+
 /// Validate the key against its provider, then store it in the Keychain ONLY if
 /// valid (per product decision: reject invalid keys rather than storing them).
+///
+/// A *definitively invalid* key (401/403/400) also clears any previously stored
+/// key for that provider, so the UI never keeps showing "validated" for a key
+/// the user just replaced with a bad one. Transient "unreachable" failures
+/// leave the existing key untouched.
 #[tauri::command]
 pub async fn set_api_key(provider: String, key: String) -> Result<(), String> {
     let key = key.trim().to_string();
     if key.is_empty() {
         return Err("empty key".into());
     }
-    validate(&provider, &key).await?;
+    if let Err(e) = validate(&provider, &key).await {
+        if e == "invalid" {
+            clear_key(&provider);
+        }
+        return Err(e);
+    }
     entry(&provider)?
         .set_password(&key)
         .map_err(|e| e.to_string())
@@ -186,11 +206,9 @@ pub async fn set_api_key(provider: String, key: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn delete_api_key(provider: String) -> Result<(), String> {
-    match entry(&provider)?.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e.to_string()),
-    }
+    account(&provider)?; // reject unknown providers
+    clear_key(&provider);
+    Ok(())
 }
 
 /// Internal accessor for the transcription layer. Stays in Rust.
