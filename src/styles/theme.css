@@ -342,6 +342,10 @@ button.mode-pill {
   line-height: 1;
   flex: none;
   display: inline-block;
+  visibility: hidden;
+}
+.nav-item.active .nav-caret {
+  visibility: visible;
 }
 
 /* ---------- stage / content window ---------- */
