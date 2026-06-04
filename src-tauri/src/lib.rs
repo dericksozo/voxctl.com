@@ -8,6 +8,7 @@ mod history;
 mod hud;
 mod lang_detect;
 mod platform;
+mod registry;
 mod resample;
 mod shortcut;
 mod transcription;
@@ -87,6 +88,8 @@ pub fn run() {
         .manage(commands::modes::ActiveModeState::default())
         .setup(|app| {
             app.manage(history::init(app.handle())?);
+            // Move any pre-multi-provider OpenAI key to its per-provider account.
+            commands::config::migrate_legacy_openai_key();
             setup_tray(app.handle())?;
             shortcut::apply_shortcut(app.handle());
             // Build the recording HUD up front (hidden) so the first record just
@@ -117,6 +120,9 @@ pub fn run() {
             commands::config::has_api_key,
             commands::config::set_api_key,
             commands::config::delete_api_key,
+            commands::config::provider_status,
+            commands::registry::get_registry,
+            commands::registry::refresh_registry,
             commands::modes::list_modes,
             commands::modes::save_mode,
             commands::modes::delete_mode,

@@ -987,6 +987,69 @@ button.mode-pill {
   color: var(--gray);
   margin-top: 9px;
 }
+/* ---- Providers & keys (one row per provider) ---- */
+.prov-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.prov-row {
+  border: 1px solid var(--line);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.prov-row.ok {
+  border-color: var(--pink);
+}
+.prov-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.prov-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  color: var(--ink);
+}
+.prov-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.prov-dot.on {
+  background: var(--pink);
+}
+.prov-dot.off {
+  background: var(--line);
+}
+.prov-model {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--gray);
+}
+.prov-model .dim {
+  opacity: 0.65;
+}
+.prov-docs {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--gray);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  padding: 0;
+}
+.prov-docs:hover {
+  color: var(--pink);
+}
 .set-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

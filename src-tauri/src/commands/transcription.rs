@@ -17,7 +17,7 @@ pub async fn retranscribe(
 ) -> Result<String, String> {
     let item = history::get(&app.state::<HistoryDb>(), id).ok_or("recording not found")?;
     let pcm16 = history::read_wav(&item.audio_path)?;
-    let key = config::get_api_key().ok_or("No OpenAI API key set.")?;
+    let key = config::get_api_key("openai").ok_or("No OpenAI API key set.")?;
 
     let transcriber = OpenAiRealtimeTranscriber::new(key);
     let on_delta = |_t: String| {};

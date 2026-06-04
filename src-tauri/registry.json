@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "openai",
+      "label": "OPENAI",
+      "keychainAccount": "voxctl.openai",
+      "docsUrl": "https://docs.voxctl.com/api/openai",
+      "defaultModelId": "gpt-realtime-whisper"
+    },
+    {
+      "id": "xai",
+      "label": "XAI",
+      "keychainAccount": "voxctl.xai",
+      "docsUrl": "https://docs.voxctl.com/api/xai",
+      "defaultModelId": "grok-stt"
+    },
+    {
+      "id": "gemini",
+      "label": "GEMINI",
+      "keychainAccount": "voxctl.gemini",
+      "docsUrl": "https://docs.voxctl.com/api/gemini",
+      "defaultModelId": "gemini-2.5-flash"
+    }
+  ],
+  "models": [
+    {
+      "id": "gpt-realtime-whisper",
+      "provider": "openai",
+      "label": "GPT-REALTIME-WHISPER",
+      "canLive": true,
+      "canFile": false,
+      "costRate": 0.017,
+      "costUnit": "perMin",
+      "capabilities": {}
+    },
+    {
+      "id": "gpt-4o-transcribe",
+      "provider": "openai",
+      "label": "GPT-4O-TRANSCRIBE",
+      "canLive": false,
+      "canFile": true,
+      "costRate": 0.006,
+      "costUnit": "perMin",
+      "capabilities": {}
+    },
+    {
+      "id": "gpt-4o-mini-transcribe",
+      "provider": "openai",
+      "label": "GPT-4O-MINI-TRANSCRIBE",
+      "canLive": false,
+      "canFile": true,
+      "costRate": 0.003,
+      "costUnit": "perMin",
+      "capabilities": {}
+    },
+    {
+      "id": "whisper-1",
+      "provider": "openai",
+      "label": "WHISPER-1",
+      "canLive": false,
+      "canFile": true,
+      "costRate": 0.006,
+      "costUnit": "perMin",
+      "capabilities": { "wordTimestamps": true }
+    },
+    {
+      "id": "grok-stt",
+      "provider": "xai",
+      "label": "GROK SPEECH-TO-TEXT",
+      "canLive": true,
+      "canFile": true,
+      "costRate": 0.1,
+      "costUnit": "perHour",
+      "capabilities": {
+        "wordTimestamps": true,
+        "diarization": true,
+        "inverseTextNormalization": true,
+        "multichannel": true
+      }
+    },
+    {
+      "id": "gemini-2.5-flash",
+      "provider": "gemini",
+      "label": "GEMINI 2.5 FLASH",
+      "canLive": false,
+      "canFile": true,
+      "costRate": 0.057,
+      "costUnit": "perHour",
+      "capabilities": {}
+    }
+  ]
+}

@@ -4,11 +4,21 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type { Config, HistoryItem, Mode, PermissionStatus } from "./types";
+import type { ProviderId, ProviderStatus, Registry } from "./registry";
 
-// --- API key (macOS Keychain, Rust-owned) ---
-export const hasApiKey = () => invoke<boolean>("has_api_key");
-export const setApiKey = (key: string) => invoke<void>("set_api_key", { key });
-export const deleteApiKey = () => invoke<void>("delete_api_key");
+// --- Provider/model registry (bundled + remote override, Rust-owned) ---
+export const getRegistry = () => invoke<Registry>("get_registry");
+export const refreshRegistry = () => invoke<Registry>("refresh_registry");
+
+// --- Per-provider API keys (macOS Keychain, Rust-owned) ---
+export const hasApiKey = (provider: ProviderId) =>
+  invoke<boolean>("has_api_key", { provider });
+export const setApiKey = (provider: ProviderId, key: string) =>
+  invoke<void>("set_api_key", { provider, key });
+export const deleteApiKey = (provider: ProviderId) =>
+  invoke<void>("delete_api_key", { provider });
+/** Per-provider key status ("validated" | "none") for the UI. */
+export const providerStatus = () => invoke<ProviderStatus>("provider_status");
 
 // --- Permissions / onboarding ---
 export const getPermissions = () => invoke<PermissionStatus>("get_permissions");

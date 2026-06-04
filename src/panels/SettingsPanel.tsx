@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Segmented, Toggle } from "../components/Primitives";
 import { ShortcutRecorder } from "../components/ShortcutRecorder";
 import { useConfig } from "../hooks/useConfig";
@@ -14,57 +15,32 @@ import {
   requestNotificationPermission,
 } from "../lib/ipc";
 import type { CaptureMode, PermissionStatus } from "../lib/types";
+import {
+  costLabel,
+  modelById,
+  providerValidated,
+  type ProviderId,
+  type ProviderRecord,
+  type ProviderStatus,
+  type Registry,
+} from "../lib/registry";
 
 export function SettingsPanel({
-  apiKeySet,
-  refreshApiKey,
+  registry,
+  providers,
+  refreshProviders,
   perms,
   refreshPerms,
   recording,
 }: {
-  apiKeySet: boolean;
-  refreshApiKey: () => void;
+  registry: Registry | null;
+  providers: ProviderStatus;
+  refreshProviders: () => void;
   perms: PermissionStatus;
   refreshPerms: () => void;
   recording: boolean;
 }) {
   const { config, set } = useConfig();
-  const [keyDraft, setKeyDraft] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [keyErr, setKeyErr] = useState<string | null>(null);
-
-  // Reflect stored state without ever pulling the secret into the webview.
-  useEffect(() => {
-    if (apiKeySet) setKeyDraft("");
-  }, [apiKeySet]);
-
-  async function saveKey() {
-    if (recording) return;
-    const k = keyDraft.trim();
-    setSaving(true);
-    setKeyErr(null);
-    try {
-      if (k) {
-        // Validated against OpenAI in Rust; an invalid key is rejected (not stored).
-        await setApiKey(k);
-      } else {
-        await deleteApiKey();
-      }
-      setKeyDraft("");
-      refreshApiKey();
-    } catch (e) {
-      const msg = String(e);
-      setKeyErr(
-        msg.includes("invalid")
-          ? t("settings.keyInvalid")
-          : msg.includes("unreachable")
-            ? t("settings.keyUnreachable")
-            : t("settings.keyError"),
-      );
-    } finally {
-      setSaving(false);
-    }
-  }
 
   const permsMissing = !perms.microphone || !perms.accessibility;
 
@@ -116,27 +92,19 @@ export function SettingsPanel({
 
       <div className="set-row">
         <div className="set-label">
-          {t("settings.apiKey")} <span className="set-sub">{t("settings.byok")}</span>
+          {t("settings.providers")} <span className="set-sub">{t("settings.byok")}</span>
         </div>
-        <div className="set-key">
-          <input
-            className="key-input"
-            value={keyDraft}
-            disabled={recording}
-            onChange={(e) => {
-              setKeyDraft(e.target.value);
-              if (keyErr) setKeyErr(null);
-            }}
-            type="password"
-            spellCheck={false}
-            placeholder={apiKeySet ? "•••••••••••••••• (stored)" : "sk-…"}
-          />
-          <button type="button" className="key-eye" onClick={saveKey} disabled={saving || recording}>
-            {saving ? t("settings.validating") : t("settings.save")}
-          </button>
-          <span className={"set-ok" + (keyErr ? " bad" : apiKeySet ? "" : " bad")}>
-            {keyErr ? "✕ " + keyErr : apiKeySet ? "✓ " + t("settings.valid") : t("settings.invalid")}
-          </span>
+        <div className="prov-list">
+          {(registry?.providers ?? []).map((p) => (
+            <ProviderRow
+              key={p.id}
+              provider={p}
+              registry={registry}
+              validated={providerValidated(providers, p.id)}
+              recording={recording}
+              onChanged={refreshProviders}
+            />
+          ))}
         </div>
         <div className="set-hint">{t("settings.keyHint")}</div>
       </div>
@@ -236,6 +204,95 @@ export function SettingsPanel({
           labels={[t("settings.on"), t("settings.off")]}
           disabled={recording}
         />
+      </div>
+    </div>
+  );
+}
+
+/** One provider's key row: stored/validated status, key entry + validate/save,
+ *  the auto-selected default model (read-only), and a docs link. Keys are
+ *  validated in Rust and only stored when valid — an invalid key shows red. */
+function ProviderRow({
+  provider,
+  registry,
+  validated,
+  recording,
+  onChanged,
+}: {
+  provider: ProviderRecord;
+  registry: Registry | null;
+  validated: boolean;
+  recording: boolean;
+  onChanged: () => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const defaultModel = modelById(registry, provider.defaultModelId);
+
+  async function save() {
+    if (recording) return;
+    const k = draft.trim();
+    setSaving(true);
+    setErr(null);
+    try {
+      if (k) await setApiKey(provider.id as ProviderId, k);
+      else await deleteApiKey(provider.id as ProviderId);
+      setDraft("");
+      onChanged();
+    } catch (e) {
+      const msg = String(e);
+      setErr(
+        msg.includes("invalid")
+          ? t("settings.keyInvalid")
+          : msg.includes("unreachable")
+            ? t("settings.keyUnreachable")
+            : t("settings.keyError"),
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className={"prov-row" + (validated ? " ok" : "")}>
+      <div className="prov-head">
+        <span className="prov-name">
+          <span className={"prov-dot " + (validated ? "on" : "off")} />
+          {provider.label}
+        </span>
+        {defaultModel ? (
+          <span className="prov-model">
+            {defaultModel.label} <span className="dim">{costLabel(defaultModel)}</span>
+          </span>
+        ) : null}
+        <button
+          type="button"
+          className="prov-docs"
+          onClick={() => openUrl(provider.docsUrl).catch(() => {})}
+        >
+          {t("settings.docs")} ↗
+        </button>
+      </div>
+      <div className="set-key">
+        <input
+          className="key-input"
+          value={draft}
+          disabled={recording}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            if (err) setErr(null);
+          }}
+          type="password"
+          spellCheck={false}
+          placeholder={validated ? "•••••••••••••••• (stored)" : t("settings.keyPlaceholder")}
+        />
+        <button type="button" className="key-eye" onClick={save} disabled={saving || recording}>
+          {saving ? t("settings.validating") : t("settings.save")}
+        </button>
+        <span className={"set-ok" + (err ? " bad" : validated ? "" : " bad")}>
+          {err ? "✕ " + err : validated ? "✓ " + t("settings.valid") : t("settings.invalid")}
+        </span>
       </div>
     </div>
   );

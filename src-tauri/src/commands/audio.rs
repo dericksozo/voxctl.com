@@ -232,7 +232,7 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
     // OpenAI while recording; local silence detection commits chunks so most
     // transcription work happens before the user stops. The captured audio is
     // still buffered locally for the WAV regardless of streaming.
-    let session_bits = match crate::commands::config::get_api_key() {
+    let session_bits = match crate::commands::config::get_api_key("openai") {
         Some(key) => {
             let app_delta = app.clone();
             let session = OpenAiRealtimeTranscriber::open_session(
