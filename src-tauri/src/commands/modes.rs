@@ -424,9 +424,9 @@ pub fn refresh_active_mode(app: &AppHandle) {
     recompute_and_emit(app);
 }
 
-/// Build the recording context (language + which app/website/mode it belongs to)
-/// from the resolved active mode. Language precedence: HUD override → active
-/// mode language → config default → auto.
+/// Build the recording context (language + model + capability options + which
+/// app/website/mode it belongs to) from the resolved active mode. Language
+/// precedence: HUD override → active mode language → config default → auto.
 pub fn resolve_context(app: &AppHandle, override_lang: Option<String>) -> RecordingContext {
     let modes = load(app);
     let pinned = read_store_string(app, PINNED_KEY);
@@ -452,11 +452,52 @@ pub fn resolve_context(app: &AppHandle, override_lang: Option<String>) -> Record
         })
         .or_else(|| load_config(app).default_language);
 
+    let reg = registry::effective(app);
+    let model_id = matched.map(|m| m.model.clone()).unwrap_or_else(|| {
+        reg.providers
+            .first()
+            .map(|p| p.default_model_id.clone())
+            .unwrap_or_default()
+    });
+    let model = reg.model_by_id(&model_id);
+    let options = build_options(matched, model, language.clone());
+
     RecordingContext {
         language,
         app_name,
         website: host,
         mode_name: matched.map(|m| m.name.clone()),
+        model_id,
+        options,
+    }
+}
+
+/// Effective transcription options: the mode's language + keywords + capability
+/// toggles, intersected with what the chosen model actually supports (so we
+/// never send a language/keyword/capability a model would ignore or reject).
+pub fn build_options(
+    mode: Option<&Mode>,
+    model: Option<&crate::registry::ModelRecord>,
+    language: Option<String>,
+) -> crate::file_transcribe::TranscribeOptions {
+    let supports_lang = model.map(|m| m.supports_language).unwrap_or(false);
+    let supports_kw = model.map(|m| m.supports_keywords).unwrap_or(false);
+    let mc = model.map(|m| &m.capabilities);
+    let sel = mode.map(|m| &m.capabilities);
+    let both = |pick: fn(&Capabilities) -> bool| -> bool {
+        sel.map(pick).unwrap_or(false) && mc.map(pick).unwrap_or(false)
+    };
+    crate::file_transcribe::TranscribeOptions {
+        language: if supports_lang { language } else { None },
+        keywords: if supports_kw {
+            mode.map(|m| m.keywords.clone()).unwrap_or_default()
+        } else {
+            Vec::new()
+        },
+        diarization: both(|c| c.diarization),
+        word_timestamps: both(|c| c.word_timestamps),
+        inverse_text_normalization: both(|c| c.inverse_text_normalization),
+        multichannel: both(|c| c.multichannel),
     }
 }
 

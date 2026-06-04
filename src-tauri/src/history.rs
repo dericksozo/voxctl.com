@@ -28,6 +28,10 @@ pub struct HistoryItem {
     pub favorite: bool,
     pub copy_count: i64,
     pub audio_path: String,
+    /// "transcribing" | "done" | "failed" | "needs_transcription".
+    pub status: String,
+    /// Registry model id used (drives cost + auto-retry).
+    pub model_id: String,
 }
 
 /// Managed state: the open SQLite connection.
@@ -68,10 +72,34 @@ fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
             words         INTEGER NOT NULL,
             favorite      INTEGER NOT NULL DEFAULT 0,
             copy_count    INTEGER NOT NULL DEFAULT 0,
-            audio_path    TEXT    NOT NULL
+            audio_path    TEXT    NOT NULL,
+            status        TEXT    NOT NULL DEFAULT 'done',
+            model_id      TEXT    NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS idx_recordings_created_at ON recordings(created_at DESC);",
     )
+}
+
+/// Add columns introduced after the initial schema. Guarded so it's a no-op on
+/// databases that already have them (existing installs predate status/model_id).
+fn migrate(conn: &Connection) -> rusqlite::Result<()> {
+    let mut have: Vec<String> = Vec::new();
+    {
+        let mut stmt = conn.prepare("PRAGMA table_info(recordings)")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+        for c in rows {
+            have.push(c?);
+        }
+    }
+    if !have.iter().any(|c| c == "status") {
+        conn.execute_batch(
+            "ALTER TABLE recordings ADD COLUMN status TEXT NOT NULL DEFAULT 'done'",
+        )?;
+    }
+    if !have.iter().any(|c| c == "model_id") {
+        conn.execute_batch("ALTER TABLE recordings ADD COLUMN model_id TEXT NOT NULL DEFAULT ''")?;
+    }
+    Ok(())
 }
 
 pub fn init(app: &AppHandle) -> Result<HistoryDb, String> {
@@ -79,6 +107,7 @@ pub fn init(app: &AppHandle) -> Result<HistoryDb, String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("create data dir: {e}"))?;
     let conn = Connection::open(dir.join("voxctl.db")).map_err(|e| format!("open db: {e}"))?;
     create_schema(&conn).map_err(|e| format!("schema: {e}"))?;
+    migrate(&conn).map_err(|e| format!("migrate: {e}"))?;
     Ok(HistoryDb(Mutex::new(conn)))
 }
 
@@ -119,12 +148,14 @@ fn insert_row(
     duration_secs: f64,
     words: i64,
     audio_path: &str,
+    status: &str,
+    model_id: &str,
 ) -> rusqlite::Result<i64> {
     conn.execute(
         "INSERT INTO recordings
-            (created_at, transcript, language, mode_name, app_name, website, duration_secs, words, audio_path)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![created_at, transcript, language, mode_name, app_name, website, duration_secs, words, audio_path],
+            (created_at, transcript, language, mode_name, app_name, website, duration_secs, words, audio_path, status, model_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![created_at, transcript, language, mode_name, app_name, website, duration_secs, words, audio_path, status, model_id],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -143,46 +174,92 @@ fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<HistoryItem> {
         favorite: row.get::<_, i64>(9)? != 0,
         copy_count: row.get(10)?,
         audio_path: row.get(11)?,
+        status: row.get(12)?,
+        model_id: row.get(13)?,
     })
 }
 
 const SELECT_COLS: &str =
-    "id, created_at, transcript, language, mode_name, app_name, website, duration_secs, words, favorite, copy_count, audio_path";
+    "id, created_at, transcript, language, mode_name, app_name, website, duration_secs, words, favorite, copy_count, audio_path, status, model_id";
 
-/// Persist a recording (WAV + DB row). Always called on stop, even on failure.
-#[allow(clippy::too_many_arguments)]
-pub fn save(
+/// Persist the WAV + a `transcribing` row BEFORE transcription is attempted, so
+/// a recording is never lost to a network error. Returns (id, audio_path).
+pub fn insert_pending(
     app: &AppHandle,
     pcm16: &[i16],
-    transcript: &str,
     language: &str,
     mode_name: &str,
     app_name: Option<&str>,
     website: Option<&str>,
-) -> Result<i64, String> {
+    model_id: &str,
+) -> Result<(i64, String), String> {
     let created_at = now_millis();
     let n = FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let path = recordings_dir(app).join(format!("rec-{created_at}-{n}.wav"));
     write_wav(&path, pcm16, crate::resample::TARGET_RATE)?;
 
-    let words = transcript.split_whitespace().count() as i64;
+    let path_str = path.to_string_lossy().to_string();
     let duration = pcm16.len() as f64 / crate::resample::TARGET_RATE as f64;
 
     let db = app.state::<HistoryDb>();
     let conn = db.0.lock().unwrap();
-    insert_row(
+    let id = insert_row(
         &conn,
         created_at,
-        transcript,
+        "",
         language,
         mode_name,
         app_name,
         website,
         duration,
-        words,
-        &path.to_string_lossy(),
+        0,
+        &path_str,
+        "transcribing",
+        model_id,
     )
-    .map_err(|e| format!("insert recording: {e}"))
+    .map_err(|e| format!("insert recording: {e}"))?;
+    Ok((id, path_str))
+}
+
+/// Update a row with the transcription result and final status.
+pub fn update_result(db: &HistoryDb, id: i64, transcript: &str, language: &str, status: &str) {
+    let conn = db.0.lock().unwrap();
+    let words = transcript.split_whitespace().count() as i64;
+    let _ = conn.execute(
+        "UPDATE recordings SET transcript = ?2, language = ?3, words = ?4, status = ?5 WHERE id = ?1",
+        params![id, transcript, language, words, status],
+    );
+}
+
+/// Set just the status (e.g. moving a row to `failed`/`needs_transcription`).
+pub fn set_status(db: &HistoryDb, id: i64, status: &str) {
+    let conn = db.0.lock().unwrap();
+    let _ = conn.execute(
+        "UPDATE recordings SET status = ?2 WHERE id = ?1",
+        params![id, status],
+    );
+}
+
+/// Rows currently in a given status (used by the retry worker).
+pub fn list_by_status(db: &HistoryDb, status: &str) -> Vec<HistoryItem> {
+    let conn = db.0.lock().unwrap();
+    let sql =
+        format!("SELECT {SELECT_COLS} FROM recordings WHERE status = ?1 ORDER BY created_at ASC");
+    let mut stmt = match conn.prepare(&sql) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("list_by_status prepare: {e}");
+            return Vec::new();
+        }
+    };
+    let rows = stmt.query_map(params![status], row_to_item);
+    match rows {
+        Ok(iter) => iter.filter_map(Result::ok).collect(),
+        Err(e) => {
+            log::error!("list_by_status query: {e}");
+            Vec::new()
+        }
+    }
 }
 
 pub fn list(db: &HistoryDb) -> Vec<HistoryItem> {
@@ -293,6 +370,8 @@ mod tests {
             1.5,
             2,
             "/tmp/x.wav",
+            "done",
+            "gpt-4o-transcribe",
         )
         .unwrap();
         assert_eq!(id, 1);
@@ -337,5 +416,66 @@ mod tests {
         assert_eq!(item.transcript, "hello world");
         assert_eq!(item.words, 2);
         assert_eq!(item.app_name.as_deref(), Some("Claude"));
+        assert_eq!(item.status, "done");
+        assert_eq!(item.model_id, "gpt-4o-transcribe");
+    }
+
+    #[test]
+    fn migrate_adds_columns_to_legacy_db_idempotently() {
+        // Simulate a pre-status/model_id database.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE recordings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL,
+                transcript TEXT NOT NULL, language TEXT NOT NULL, mode_name TEXT NOT NULL,
+                app_name TEXT, website TEXT, duration_secs REAL NOT NULL, words INTEGER NOT NULL,
+                favorite INTEGER NOT NULL DEFAULT 0, copy_count INTEGER NOT NULL DEFAULT 0,
+                audio_path TEXT NOT NULL );
+             INSERT INTO recordings (created_at, transcript, language, mode_name, duration_secs, words, audio_path)
+             VALUES (1, 'hi', 'en', 'M', 1.0, 1, '/tmp/a.wav');",
+        )
+        .unwrap();
+        // Running migrate twice must be safe and leave legacy rows as 'done'/''.
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap();
+        let (status, model): (String, String) = conn
+            .query_row(
+                "SELECT status, model_id FROM recordings WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "done");
+        assert_eq!(model, "");
+    }
+
+    #[test]
+    fn status_lifecycle() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        let id = insert_row(
+            &conn,
+            1,
+            "",
+            "auto",
+            "M",
+            None,
+            None,
+            2.0,
+            0,
+            "/tmp/a.wav",
+            "transcribing",
+            "grok-stt",
+        )
+        .unwrap();
+        let db = HistoryDb(Mutex::new(conn));
+        assert_eq!(list_by_status(&db, "transcribing").len(), 1);
+        update_result(&db, id, "done text", "en", "done");
+        assert!(list_by_status(&db, "transcribing").is_empty());
+        let item = get(&db, id).unwrap();
+        assert_eq!(item.status, "done");
+        assert_eq!(item.words, 2);
+        set_status(&db, id, "failed");
+        assert_eq!(list_by_status(&db, "failed").len(), 1);
     }
 }

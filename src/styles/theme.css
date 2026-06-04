@@ -764,6 +764,24 @@ button.mode-pill {
 .file-chip.ctx::before {
   background: var(--pink);
 }
+.file-chip.busy {
+  color: var(--pink);
+  border-color: color-mix(in srgb, var(--pink) 45%, transparent);
+}
+.file-chip.busy::before {
+  background: var(--pink);
+}
+.file-chip.err {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 50%, transparent);
+}
+.file-chip.err::before {
+  background: var(--danger);
+}
+.file-preview.placeholder {
+  color: var(--gray);
+  font-style: italic;
+}
 .file-preview {
   font-size: 13px;
   line-height: 1.5;

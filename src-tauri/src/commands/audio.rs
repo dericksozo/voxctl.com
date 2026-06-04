@@ -27,14 +27,19 @@ pub struct Capture {
     join: Option<JoinHandle<()>>,
 }
 
-/// Context captured at record start, attached to the saved history row.
-/// Slice 6 fills app_name/website/mode_name from frontmost-app detection.
+/// Context captured at record start, attached to the saved history row and used
+/// to drive transcription (which provider/model + capability settings).
 #[derive(Default, Clone)]
 pub struct RecordingContext {
     pub language: Option<String>,
     pub app_name: Option<String>,
     pub website: Option<String>,
     pub mode_name: Option<String>,
+    /// Resolved active-mode model id (registry).
+    pub model_id: String,
+    /// Effective transcription settings for the file path (language + keywords
+    /// + capability toggles, intersected with model support).
+    pub options: crate::file_transcribe::TranscribeOptions,
 }
 
 #[derive(Default)]
@@ -228,16 +233,27 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
     let ctx = crate::commands::modes::resolve_context(app, override_lang);
     let language = ctx.language.clone();
 
-    // Open a live transcription session (when a key exists). Audio streams to
-    // OpenAI while recording; local silence detection commits chunks so most
-    // transcription work happens before the user stops. The captured audio is
-    // still buffered locally for the WAV regardless of streaming.
-    let session_bits = match crate::commands::config::get_api_key("openai") {
+    // Decide the transcription path from the active mode's model. Live-capable
+    // OpenAI models stream while recording (lowest latency); every other model
+    // is transcribed from the saved WAV on stop (see audio_pipeline). Audio is
+    // buffered locally for the WAV regardless of which path runs.
+    let reg = crate::registry::effective(app);
+    let model = reg.model_by_id(&ctx.model_id);
+    let live_stream = model
+        .map(|m| m.can_live && m.provider == "openai")
+        .unwrap_or(false);
+    let live_key = if live_stream {
+        crate::commands::config::get_api_key("openai")
+    } else {
+        None
+    };
+
+    let session_bits = match live_key {
         Some(key) => {
             let app_delta = app.clone();
             let session = OpenAiRealtimeTranscriber::open_session(
                 key,
-                language.clone(),
+                ctx.options.language.clone(),
                 move |text: String| {
                     let _ =
                         app_delta.emit(events::TRANSCRIPT_PARTIAL, events::TranscriptText { text });

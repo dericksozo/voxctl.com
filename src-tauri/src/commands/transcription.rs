@@ -28,6 +28,8 @@ pub async fn retranscribe(
     // Same "auto" → detected-language resolution as the live recording path.
     let lang = crate::lang_detect::resolve(language.as_deref(), &text);
     history::update_transcript(&app.state::<HistoryDb>(), id, &text, &lang);
+    // A successful re-run clears any failed/needs_transcription state.
+    history::set_status(&app.state::<HistoryDb>(), id, "done");
     let _ = app.emit(events::HISTORY_CHANGED, ());
     Ok(text)
 }

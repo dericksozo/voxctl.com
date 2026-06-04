@@ -40,6 +40,12 @@
   "history.favorite": "FAV",
   "history.retranscribe": "RE-RUN",
   "history.words": "WORDS",
+  "history.statusTranscribing": "TRANSCRIBING",
+  "history.statusFailed": "FAILED",
+  "history.statusNeeds": "NEEDS TRANSCRIPTION",
+  "history.transcribing": "TRANSCRIBING…",
+  "history.failed": "TRANSCRIPTION FAILED — RETRYING IN THE BACKGROUND…",
+  "history.needsTranscription": "NO TRANSCRIPT — RE-RUN THROUGH A FILE MODE",
 
   "modes.add": "DEFINE NEW MODE",
   "modes.active": "ACTIVE",
