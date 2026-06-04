@@ -3,7 +3,7 @@
 // stubs from slice 1 so the UI never hits a missing-command runtime error.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { Config, HistoryItem, Mode, PermissionStatus } from "./types";
+import type { ActiveMode, Config, HistoryItem, Mode, PermissionStatus } from "./types";
 import type { ProviderId, ProviderStatus, Registry } from "./registry";
 
 // --- Provider/model registry (bundled + remote override, Rust-owned) ---
@@ -42,7 +42,12 @@ export const saveMode = (mode: Mode) => invoke<void>("save_mode", { mode });
 export const deleteMode = (id: string) => invoke<void>("delete_mode", { id });
 export const setModeEnabled = (id: string, enabled: boolean) =>
   invoke<void>("set_mode_enabled", { id, enabled });
-export const getActiveMode = () => invoke<Mode | null>("get_active_mode");
+export const getActiveMode = () => invoke<ActiveMode | null>("get_active_mode");
+/** Manually pin a mode (sticky across app switches until unpinned). */
+export const pinMode = (id: string) => invoke<void>("pin_mode", { id });
+export const unpinMode = () => invoke<void>("unpin_mode");
+/** Designate the priority-3 fallback (non-deletable) mode. */
+export const setDefaultMode = (id: string) => invoke<void>("set_default_mode", { id });
 
 // --- History ---
 export const listHistory = () => invoke<HistoryItem[]>("list_history");
