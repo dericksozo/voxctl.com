@@ -5,6 +5,7 @@ import { Clock } from "./components/Clock";
 import { VolumeMeter } from "./components/VolumeMeter";
 import { Typewriter } from "./components/Typewriter";
 import { DEFAULT_THEME, type Theme, TweaksPanel } from "./components/TweaksPanel";
+import { ModeSwitcher } from "./components/ModeSwitcher";
 import { HomePanel } from "./panels/HomePanel";
 import { HistoryPanel } from "./panels/HistoryPanel";
 import { ModesPanel } from "./panels/ModesPanel";
@@ -21,7 +22,7 @@ import {
   listModes,
   providerStatus,
 } from "./lib/ipc";
-import type { HistoryItem, Mode, PermissionStatus } from "./lib/types";
+import type { ActiveMode, HistoryItem, Mode, PermissionStatus } from "./lib/types";
 import {
   anyKeyValidated,
   EMPTY_PROVIDER_STATUS,
@@ -47,7 +48,7 @@ export default function App() {
 
   const [modes, setModes] = useState<Mode[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [activeMode, setActiveMode] = useState<Mode | null>(null);
+  const [activeMode, setActiveMode] = useState<ActiveMode | null>(null);
   const [registry, setRegistry] = useState<Registry | null>(null);
   const [providers, setProviders] = useState<ProviderStatus>(EMPTY_PROVIDER_STATUS);
   const [perms, setPerms] = useState<PermissionStatus>({ microphone: true, accessibility: true });
@@ -98,7 +99,7 @@ export default function App() {
     document.documentElement.style.setProperty("--head", `"${theme.headerFont}", sans-serif`);
   }, [theme]);
 
-  const activeModeName = activeMode?.name ?? "—";
+  const activeModeName = activeMode?.mode.name ?? "—";
   const minutes = Math.round(history.reduce((s, h) => s + h.durationSecs, 0) / 60);
 
   const META: Record<string, string> = {
@@ -175,7 +176,16 @@ export default function App() {
       case "history":
         return <HistoryPanel history={history} onChange={refreshHistory} stopToken={audioStopToken} />;
       case "modes":
-        return <ModesPanel modes={modes} activeModeId={activeMode?.id ?? null} onChange={refreshModes} />;
+        return (
+          <ModesPanel
+            modes={modes}
+            activeModeId={activeMode?.mode.id ?? null}
+            registry={registry}
+            providers={providers}
+            onChange={refreshModes}
+            go={switchTo}
+          />
+        );
       case "settings":
         return (
           <SettingsPanel
@@ -216,9 +226,7 @@ export default function App() {
               {t("perm.title")}
             </button>
           ) : (
-            <div className="mode-pill">
-              {t("header.activeMode")} <b>▸ {activeModeName}</b>
-            </div>
+            <ModeSwitcher modes={modes} active={activeMode} onChange={refreshModes} />
           )}
           <div className="head-stat">
             {t("header.link")}{" "}

@@ -162,6 +162,93 @@ button.mode-pill {
     background: color-mix(in srgb, var(--pink) 26%, transparent);
   }
 }
+/* ---- Active-mode switcher (top bar) ---- */
+.mode-switch {
+  position: relative;
+}
+.mode-pill.pinned {
+  border-color: var(--pink);
+  background: color-mix(in srgb, var(--pink) 10%, transparent);
+}
+.ms-reason {
+  margin-left: 8px;
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  color: var(--gray);
+  border: 1px solid var(--line);
+  padding: 1px 5px;
+}
+.mode-pill.pinned .ms-reason {
+  color: var(--pink);
+  border-color: color-mix(in srgb, var(--pink) 45%, transparent);
+}
+.ms-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 50;
+  min-width: 220px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  gap: 2px;
+}
+.ms-menu-head {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--gray);
+  padding: 4px 6px;
+}
+.ms-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--ink);
+  padding: 6px;
+  text-align: left;
+}
+.ms-item:hover {
+  background: color-mix(in srgb, var(--pink) 8%, transparent);
+}
+.ms-item.sel {
+  color: var(--pink);
+}
+.ms-radio {
+  color: var(--pink);
+  font-size: 9px;
+}
+.ms-name {
+  flex: 1;
+}
+.ms-unpin {
+  margin-top: 4px;
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--gray);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  padding: 6px;
+}
+.ms-unpin:hover {
+  border-color: var(--pink);
+  color: var(--pink);
+}
+.ms-empty {
+  font-size: 10px;
+  color: var(--gray);
+  padding: 6px;
+}
 .head-stat {
   font-size: 11px;
   letter-spacing: 0.16em;
@@ -849,6 +936,114 @@ button.mode-pill {
 }
 .add-mode.top:hover {
   background: color-mix(in srgb, var(--pink) 7%, transparent);
+}
+
+/* ---- Model picker (mode editor) ---- */
+.model-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--line);
+  padding: 10px;
+}
+.mp-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mp-group.locked {
+  opacity: 0.55;
+}
+.mp-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  color: var(--gray);
+  margin: 4px 0 2px;
+}
+.mp-prov {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mp-addkey {
+  background: none;
+  border: none;
+  color: var(--pink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+}
+.mp-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--ink);
+  padding: 7px 8px;
+  text-align: left;
+}
+.mp-row:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--pink) 35%, transparent);
+}
+.mp-row.sel {
+  border-color: var(--pink);
+  background: color-mix(in srgb, var(--pink) 7%, transparent);
+}
+.mp-row:disabled {
+  cursor: not-allowed;
+  color: var(--gray);
+}
+.mp-radio {
+  color: var(--pink);
+  font-size: 10px;
+}
+.mp-name {
+  flex: 1;
+}
+.mp-badge {
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: var(--pink);
+  border: 1px solid color-mix(in srgb, var(--pink) 40%, transparent);
+  padding: 1px 6px;
+}
+.mp-cost {
+  color: var(--gray);
+  font-size: 10px;
+  min-width: 84px;
+  text-align: right;
+}
+.mp-legend {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--gray);
+  margin-top: 4px;
+}
+/* ---- Capability toggles (mode editor) ---- */
+.cap-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cap-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.cap-label {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--ink-soft);
 }
 
 .modes-new {

@@ -1,5 +1,7 @@
 // Shared data shapes mirrored on the Rust side (serde camelCase).
 
+import type { Capabilities } from "./registry";
+
 export type CaptureMode = "toggle" | "ptt";
 
 /** Non-secret settings, persisted via tauri-plugin-store (settings.json).
@@ -40,9 +42,19 @@ export interface Mode {
   triggerApps: string[];
   /** Website domains that auto-activate this mode (best-effort via AX). */
   triggerWebsites: string[];
-  /** Transcription model id. v1 = "gpt-realtime-whisper". */
+  /** Transcription model id (must exist in the registry). */
   model: string;
+  /** User-enabled subset of the model's declared capabilities. */
+  capabilities: Capabilities;
   builtin: boolean;
+}
+
+/** Why a mode is currently active. */
+export type ActiveReason = "pinned" | "auto" | "default";
+
+export interface ActiveMode {
+  mode: Mode;
+  reason: ActiveReason;
 }
 
 export interface HistoryItem {
