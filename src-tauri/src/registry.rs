@@ -70,6 +70,22 @@ pub struct ModelRecord {
     pub cost_rate: f64,
     /// "perMin" | "perHour" | "perToken".
     pub cost_unit: String,
+    /// Whether the model honors a language hint (the Mode editor hides the
+    /// Language control when false — e.g. streaming whisper is auto-only).
+    #[serde(default)]
+    pub supports_language: bool,
+    /// Whether the model honors keyword/vocabulary steering (hides Keywords).
+    #[serde(default)]
+    pub supports_keywords: bool,
+    /// Teaching metadata surfaced in the model picker.
+    #[serde(default)]
+    pub accuracy: String,
+    #[serde(default)]
+    pub speed: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub use_case: String,
     #[serde(default)]
     pub capabilities: Capabilities,
     #[serde(default)]
@@ -216,5 +232,28 @@ mod tests {
         // realtime whisper is live-only.
         let r = reg.model_by_id("gpt-realtime-whisper").unwrap();
         assert!(r.can_live && !r.can_file);
+    }
+
+    #[test]
+    fn language_and_keyword_support_flags() {
+        let reg = bundled();
+        // Streaming whisper is auto-only and takes no keyword steering.
+        let r = reg.model_by_id("gpt-realtime-whisper").unwrap();
+        assert!(!r.supports_language && !r.supports_keywords);
+        // File models accept a language hint and keyword steering.
+        let f = reg.model_by_id("gpt-4o-transcribe").unwrap();
+        assert!(f.supports_language && f.supports_keywords);
+        let g = reg.model_by_id("grok-stt").unwrap();
+        assert!(g.supports_language && g.supports_keywords);
+    }
+
+    #[test]
+    fn models_carry_teaching_metadata() {
+        let reg = bundled();
+        for m in &reg.models {
+            assert!(!m.description.is_empty(), "{} has no description", m.id);
+            assert!(!m.accuracy.is_empty(), "{} has no accuracy", m.id);
+            assert!(!m.speed.is_empty(), "{} has no speed", m.id);
+        }
     }
 }

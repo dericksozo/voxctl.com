@@ -32,6 +32,12 @@
       "canFile": false,
       "costRate": 0.017,
       "costUnit": "perMin",
+      "supportsLanguage": false,
+      "supportsKeywords": false,
+      "accuracy": "GOOD",
+      "speed": "REALTIME",
+      "description": "Streaming dictation — transcribes as you speak, lowest latency. Auto language only.",
+      "useCase": "Everyday live dictation where speed matters more than peak accuracy.",
       "capabilities": {}
     },
     {
@@ -42,6 +48,12 @@
       "canFile": true,
       "costRate": 0.006,
       "costUnit": "perMin",
+      "supportsLanguage": true,
+      "supportsKeywords": true,
+      "accuracy": "VERY HIGH",
+      "speed": "FAST",
+      "description": "Best default accuracy for transcribing a finished recording.",
+      "useCase": "Re-running saved audio for a clean, accurate transcript.",
       "capabilities": {}
     },
     {
@@ -52,6 +64,12 @@
       "canFile": true,
       "costRate": 0.003,
       "costUnit": "perMin",
+      "supportsLanguage": true,
+      "supportsKeywords": true,
+      "accuracy": "HIGH",
+      "speed": "FAST",
+      "description": "Budget transcription at half the cost of GPT-4o-transcribe.",
+      "useCase": "High-volume or cost-sensitive transcription where top accuracy isn't critical.",
       "capabilities": {}
     },
     {
@@ -62,6 +80,12 @@
       "canFile": true,
       "costRate": 0.006,
       "costUnit": "perMin",
+      "supportsLanguage": true,
+      "supportsKeywords": true,
+      "accuracy": "HIGH",
+      "speed": "MEDIUM",
+      "description": "Whisper with word-level timestamps — the only OpenAI model that returns them.",
+      "useCase": "When you need per-word timing, e.g. captions or alignment.",
       "capabilities": { "wordTimestamps": true }
     },
     {
@@ -72,6 +96,12 @@
       "canFile": true,
       "costRate": 0.1,
       "costUnit": "perHour",
+      "supportsLanguage": true,
+      "supportsKeywords": true,
+      "accuracy": "HIGH",
+      "speed": "FAST",
+      "description": "xAI speech-to-text — does live and file, with diarization, word timestamps, multichannel and formatting (ITN).",
+      "useCase": "Multi-speaker recordings or meetings where you want speaker labels; cheapest per-hour.",
       "capabilities": {
         "wordTimestamps": true,
         "diarization": true,
@@ -87,6 +117,12 @@
       "canFile": true,
       "costRate": 0.057,
       "costUnit": "perHour",
+      "supportsLanguage": true,
+      "supportsKeywords": true,
+      "accuracy": "GOOD",
+      "speed": "MEDIUM",
+      "description": "Gemini multimodal transcription via prompt — not a dedicated ASR endpoint.",
+      "useCase": "Transcribing within the Google ecosystem, or flexible prompt-based control.",
       "capabilities": {}
     }
   ]

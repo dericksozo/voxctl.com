@@ -32,6 +32,15 @@ export interface ModelRecord {
   canFile: boolean;
   costRate: number;
   costUnit: CostUnit;
+  /** Honors a language hint (hide the Language control when false). */
+  supportsLanguage: boolean;
+  /** Honors keyword/vocabulary steering (hide the Keywords field when false). */
+  supportsKeywords: boolean;
+  /** Teaching metadata for the model picker. */
+  accuracy: string;
+  speed: string;
+  description: string;
+  useCase: string;
   capabilities: Capabilities;
   languages?: string[];
 }

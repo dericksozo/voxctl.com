@@ -979,7 +979,7 @@ button.mode-pill {
 }
 .mp-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   background: none;
   border: 1px solid transparent;
@@ -1005,9 +1005,27 @@ button.mode-pill {
 .mp-radio {
   color: var(--pink);
   font-size: 10px;
+  margin-top: 1px;
+}
+.mp-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mp-name-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 .mp-name {
   flex: 1;
+}
+.mp-desc {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--gray);
 }
 .mp-badge {
   font-size: 9px;
@@ -1027,6 +1045,52 @@ button.mode-pill {
   letter-spacing: 0.06em;
   color: var(--gray);
   margin-top: 4px;
+}
+/* ---- Selected-model info (mode editor) ---- */
+.model-info {
+  border: 1px solid color-mix(in srgb, var(--pink) 30%, var(--line));
+  background: color-mix(in srgb, var(--pink) 4%, transparent);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mi-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.mi-name {
+  flex: 1;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  color: var(--ink);
+}
+.mi-cost {
+  color: var(--gray);
+  font-size: 11px;
+}
+.mi-desc {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+.mi-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+}
+.mi-k {
+  color: var(--gray);
+  margin-right: 4px;
+}
+.mi-use {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--gray);
 }
 /* ---- Capability toggles (mode editor) ---- */
 .cap-toggles {

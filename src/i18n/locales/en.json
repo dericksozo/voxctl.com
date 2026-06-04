@@ -51,6 +51,8 @@
   "modes.keywords": "KEYWORDS",
   "modes.addKey": "ADD YOUR {provider} KEY",
   "modes.badgeLegend": "[ LIVE ] TRANSCRIBES AS YOU SPEAK · [ FILE ] TRANSCRIBES A SAVED RECORDING",
+  "modes.accuracy": "ACCURACY",
+  "modes.speed": "SPEED",
   "modes.edit": "EDIT",
   "modes.delete": "DELETE",
   "modes.new.title": "DEFINE NEW MODE",
