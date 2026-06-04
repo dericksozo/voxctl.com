@@ -13,7 +13,7 @@
       "label": "XAI",
       "keychainAccount": "voxctl.xai",
       "docsUrl": "https://docs.voxctl.com/api/xai",
-      "defaultModelId": "grok-stt"
+      "defaultModelId": "grok-stt-live"
     },
     {
       "id": "gemini",
@@ -89,10 +89,30 @@
       "capabilities": { "wordTimestamps": true }
     },
     {
-      "id": "grok-stt",
+      "id": "grok-stt-live",
       "provider": "xai",
-      "label": "GROK SPEECH-TO-TEXT",
+      "label": "GROK STT (LIVE)",
       "canLive": true,
+      "canFile": false,
+      "costRate": 0.2,
+      "costUnit": "perHour",
+      "supportsLanguage": true,
+      "supportsKeywords": true,
+      "accuracy": "HIGH",
+      "speed": "REALTIME",
+      "description": "xAI streaming speech-to-text over WebSocket — transcribes as you speak.",
+      "useCase": "Live dictation with diarization, word timestamps and keyword biasing.",
+      "capabilities": {
+        "wordTimestamps": true,
+        "diarization": true,
+        "multichannel": true
+      }
+    },
+    {
+      "id": "grok-stt-file",
+      "provider": "xai",
+      "label": "GROK STT (FILE)",
+      "canLive": false,
       "canFile": true,
       "costRate": 0.1,
       "costUnit": "perHour",
@@ -100,8 +120,8 @@
       "supportsKeywords": true,
       "accuracy": "HIGH",
       "speed": "FAST",
-      "description": "xAI speech-to-text — does live and file, with diarization, word timestamps, multichannel and formatting (ITN).",
-      "useCase": "Multi-speaker recordings or meetings where you want speaker labels; cheapest per-hour.",
+      "description": "xAI batch speech-to-text for a saved recording — cheapest per hour. Same features plus formatting (ITN).",
+      "useCase": "Re-running saved audio, or multi-speaker files where you want speaker labels and timestamps.",
       "capabilities": {
         "wordTimestamps": true,
         "diarization": true,
