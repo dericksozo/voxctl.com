@@ -13,6 +13,7 @@ mod shortcut;
 mod transcription;
 
 use tauri::{
+    image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager,
@@ -38,13 +39,11 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "Quit VOXCTL", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
 
-    let icon = app
-        .default_window_icon()
-        .cloned()
-        .expect("default window icon is bundled");
+    let icon = Image::from_bytes(include_bytes!("../icons/tray/64x64.png"))?;
 
     TrayIconBuilder::with_id("main")
         .icon(icon)
+        .icon_as_template(false)
         .tooltip("VOXCTL")
         .menu(&menu)
         .show_menu_on_left_click(false)
