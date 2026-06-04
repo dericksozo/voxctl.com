@@ -196,8 +196,8 @@ pub fn get_active_mode(app: AppHandle) -> Option<Mode> {
 }
 
 /// Recompute the active mode from the frontmost app/website. Called on every
-/// app switch (and after mode edits). Updates the tray title, emits
-/// `mode-changed`, and optionally notifies — only when the mode actually changes.
+/// app switch (and after mode edits). Emits `mode-changed` and optionally
+/// notifies — only when the mode actually changes.
 pub fn refresh_active_mode(app: &AppHandle) {
     let Some((app_name, bundle)) = macos::frontmost_app() else {
         return;
@@ -219,9 +219,6 @@ pub fn refresh_active_mode(app: &AppHandle) {
         *cur = new_name.clone();
     }
 
-    if let Some(tray) = app.tray_by_id("main") {
-        let _ = tray.set_title(Some(new_name.clone().unwrap_or_else(|| "VOX".into())));
-    }
     let _ = app.emit(
         events::MODE_CHANGED,
         events::ModeChanged {
