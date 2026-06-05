@@ -32,6 +32,8 @@ pub struct HistoryItem {
     pub status: String,
     /// Registry model id used (drives cost + auto-retry).
     pub model_id: String,
+    /// Size of the saved WAV on disk, in bytes (0 if the file is gone).
+    pub audio_bytes: i64,
 }
 
 /// Managed state: the open SQLite connection.
@@ -74,7 +76,8 @@ fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
             copy_count    INTEGER NOT NULL DEFAULT 0,
             audio_path    TEXT    NOT NULL,
             status        TEXT    NOT NULL DEFAULT 'done',
-            model_id      TEXT    NOT NULL DEFAULT ''
+            model_id      TEXT    NOT NULL DEFAULT '',
+            audio_bytes   INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_recordings_created_at ON recordings(created_at DESC);",
     )
@@ -98,6 +101,11 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     }
     if !have.iter().any(|c| c == "model_id") {
         conn.execute_batch("ALTER TABLE recordings ADD COLUMN model_id TEXT NOT NULL DEFAULT ''")?;
+    }
+    if !have.iter().any(|c| c == "audio_bytes") {
+        conn.execute_batch(
+            "ALTER TABLE recordings ADD COLUMN audio_bytes INTEGER NOT NULL DEFAULT 0",
+        )?;
     }
     Ok(())
 }
@@ -127,6 +135,7 @@ pub fn write_wav(path: &Path, pcm16: &[i16], rate: u32) -> Result<(), String> {
     w.finalize().map_err(|e| format!("wav finalize: {e}"))
 }
 
+#[cfg(test)]
 pub fn read_wav(path: &str) -> Result<Vec<i16>, String> {
     let mut r = hound::WavReader::open(path).map_err(|e| format!("wav open: {e}"))?;
     r.samples::<i16>()
@@ -150,12 +159,13 @@ fn insert_row(
     audio_path: &str,
     status: &str,
     model_id: &str,
+    audio_bytes: i64,
 ) -> rusqlite::Result<i64> {
     conn.execute(
         "INSERT INTO recordings
-            (created_at, transcript, language, mode_name, app_name, website, duration_secs, words, audio_path, status, model_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-        params![created_at, transcript, language, mode_name, app_name, website, duration_secs, words, audio_path, status, model_id],
+            (created_at, transcript, language, mode_name, app_name, website, duration_secs, words, audio_path, status, model_id, audio_bytes)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![created_at, transcript, language, mode_name, app_name, website, duration_secs, words, audio_path, status, model_id, audio_bytes],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -176,11 +186,12 @@ fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<HistoryItem> {
         audio_path: row.get(11)?,
         status: row.get(12)?,
         model_id: row.get(13)?,
+        audio_bytes: row.get(14)?,
     })
 }
 
 const SELECT_COLS: &str =
-    "id, created_at, transcript, language, mode_name, app_name, website, duration_secs, words, favorite, copy_count, audio_path, status, model_id";
+    "id, created_at, transcript, language, mode_name, app_name, website, duration_secs, words, favorite, copy_count, audio_path, status, model_id, audio_bytes";
 
 /// Persist the WAV + a `transcribing` row BEFORE transcription is attempted, so
 /// a recording is never lost to a network error. Returns (id, audio_path).
@@ -200,6 +211,9 @@ pub fn insert_pending(
 
     let path_str = path.to_string_lossy().to_string();
     let duration = pcm16.len() as f64 / crate::resample::TARGET_RATE as f64;
+    let audio_bytes = std::fs::metadata(&path)
+        .map(|m| m.len() as i64)
+        .unwrap_or(0);
 
     let db = app.state::<HistoryDb>();
     let conn = db.0.lock().unwrap();
@@ -216,6 +230,7 @@ pub fn insert_pending(
         &path_str,
         "transcribing",
         model_id,
+        audio_bytes,
     )
     .map_err(|e| format!("insert recording: {e}"))?;
     Ok((id, path_str))
@@ -331,13 +346,100 @@ pub fn increment_copy(db: &HistoryDb, id: i64) -> i64 {
     .unwrap_or(0)
 }
 
-pub fn update_transcript(db: &HistoryDb, id: i64, transcript: &str, language: &str) {
+/// Set the model id (after a re-run through a different mode).
+pub fn set_model_id(db: &HistoryDb, id: i64, model_id: &str) {
     let conn = db.0.lock().unwrap();
-    let words = transcript.split_whitespace().count() as i64;
     let _ = conn.execute(
-        "UPDATE recordings SET transcript = ?2, language = ?3, words = ?4 WHERE id = ?1",
-        params![id, transcript, language, words],
+        "UPDATE recordings SET model_id = ?2 WHERE id = ?1",
+        params![id, model_id],
     );
+}
+
+/// Delete multiple rows; returns each removed row's audio path so the caller can
+/// decide whether to also remove the file (per the delete-behavior setting).
+pub fn delete_many(db: &HistoryDb, ids: &[i64]) -> Vec<String> {
+    let conn = db.0.lock().unwrap();
+    let mut paths = Vec::new();
+    for &id in ids {
+        if let Ok(p) = conn.query_row(
+            "SELECT audio_path FROM recordings WHERE id = ?1",
+            params![id],
+            |r| r.get::<_, String>(0),
+        ) {
+            paths.push(p);
+        }
+        let _ = conn.execute("DELETE FROM recordings WHERE id = ?1", params![id]);
+    }
+    paths
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageStats {
+    /// Total bytes of all WAV files in the recordings directory (incl. any orphans).
+    pub total_bytes: i64,
+    pub file_count: i64,
+    pub recording_count: i64,
+}
+
+/// Disk usage of the recordings directory + how many history rows exist.
+pub fn storage_stats(app: &AppHandle) -> StorageStats {
+    let dir = recordings_dir(app);
+    let mut total_bytes = 0i64;
+    let mut file_count = 0i64;
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for e in entries.flatten() {
+            if let Ok(meta) = e.metadata() {
+                if meta.is_file() {
+                    total_bytes += meta.len() as i64;
+                    file_count += 1;
+                }
+            }
+        }
+    }
+    let db = app.state::<HistoryDb>();
+    let recording_count =
+        db.0.lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM recordings", [], |r| r.get(0))
+            .unwrap_or(0);
+    StorageStats {
+        total_bytes,
+        file_count,
+        recording_count,
+    }
+}
+
+/// Delete recordings older than `older_than_days` (optionally keeping favorites).
+/// Returns the audio paths of the removed rows so the caller can delete the files
+/// (purge always frees disk, regardless of the delete-behavior setting).
+pub fn purge_older_than(db: &HistoryDb, older_than_days: u32, keep_favorites: bool) -> Vec<String> {
+    let cutoff = now_millis() - (older_than_days as i64) * 86_400_000;
+    let conn = db.0.lock().unwrap();
+    let (select_sql, delete_sql) = if keep_favorites {
+        (
+            "SELECT audio_path FROM recordings WHERE created_at < ?1 AND favorite = 0",
+            "DELETE FROM recordings WHERE created_at < ?1 AND favorite = 0",
+        )
+    } else {
+        (
+            "SELECT audio_path FROM recordings WHERE created_at < ?1",
+            "DELETE FROM recordings WHERE created_at < ?1",
+        )
+    };
+    let paths: Vec<String> = {
+        let mut stmt = match conn.prepare(select_sql) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let rows = stmt.query_map(params![cutoff], |r| r.get::<_, String>(0));
+        match rows {
+            Ok(it) => it.filter_map(Result::ok).collect(),
+            Err(_) => Vec::new(),
+        }
+    };
+    let _ = conn.execute(delete_sql, params![cutoff]);
+    paths
 }
 
 #[cfg(test)]
@@ -372,6 +474,7 @@ mod tests {
             "/tmp/x.wav",
             "done",
             "gpt-4o-transcribe",
+            12345,
         )
         .unwrap();
         assert_eq!(id, 1);
@@ -466,6 +569,7 @@ mod tests {
             "/tmp/a.wav",
             "transcribing",
             "grok-stt",
+            0,
         )
         .unwrap();
         let db = HistoryDb(Mutex::new(conn));
@@ -477,5 +581,34 @@ mod tests {
         assert_eq!(item.words, 2);
         set_status(&db, id, "failed");
         assert_eq!(list_by_status(&db, "failed").len(), 1);
+    }
+
+    #[test]
+    fn purge_older_than_respects_favorites() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        let day = 86_400_000i64;
+        let old = now_millis() - 10 * day;
+        let recent = now_millis() - day;
+        // old + not favorite -> purged; old + favorite -> kept when keep_favorites; recent -> kept.
+        let mk = |conn: &Connection, at: i64, fav: i64, path: &str| {
+            let id = insert_row(
+                conn, at, "t", "en", "M", None, None, 1.0, 1, path, "done", "m", 100,
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE recordings SET favorite = ?2 WHERE id = ?1",
+                params![id, fav],
+            )
+            .unwrap();
+        };
+        mk(&conn, old, 0, "/tmp/old.wav");
+        mk(&conn, old, 1, "/tmp/oldfav.wav");
+        mk(&conn, recent, 0, "/tmp/recent.wav");
+        let db = HistoryDb(Mutex::new(conn));
+
+        let removed = purge_older_than(&db, 7, true);
+        assert_eq!(removed, vec!["/tmp/old.wav".to_string()]);
+        assert_eq!(list(&db).len(), 2); // favorite + recent remain
     }
 }

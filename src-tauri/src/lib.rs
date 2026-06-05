@@ -149,9 +149,12 @@ pub fn run() {
             commands::permissions::open_permission_settings,
             commands::history::list_history,
             commands::history::delete_recording,
+            commands::history::delete_recordings,
             commands::history::toggle_favorite,
             commands::history::increment_copy,
             commands::history::read_audio,
+            commands::history::storage_stats,
+            commands::history::purge_recordings,
             commands::transcription::retranscribe,
         ])
         .build(tauri::generate_context!())

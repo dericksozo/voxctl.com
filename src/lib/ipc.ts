@@ -3,7 +3,14 @@
 // stubs from slice 1 so the UI never hits a missing-command runtime error.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ActiveMode, Config, HistoryItem, Mode, PermissionStatus } from "./types";
+import type {
+  ActiveMode,
+  Config,
+  HistoryItem,
+  Mode,
+  PermissionStatus,
+  StorageStats,
+} from "./types";
 import type { ProviderId, ProviderStatus, Registry } from "./registry";
 
 // --- Provider/model registry (bundled + remote override, Rust-owned) ---
@@ -52,12 +59,19 @@ export const setDefaultMode = (id: string) => invoke<void>("set_default_mode", {
 // --- History ---
 export const listHistory = () => invoke<HistoryItem[]>("list_history");
 export const deleteRecording = (id: number) => invoke<void>("delete_recording", { id });
+export const deleteRecordings = (ids: number[]) => invoke<void>("delete_recordings", { ids });
 export const toggleFavorite = (id: number) => invoke<boolean>("toggle_favorite", { id });
 export const incrementCopy = (id: number) => invoke<number>("increment_copy", { id });
-export const retranscribe = (id: number, language: string | null) =>
-  invoke<string>("retranscribe", { id, language });
+/** Re-run a saved recording through a chosen (file-capable) mode. */
+export const retranscribe = (id: number, modeId: string) =>
+  invoke<string>("retranscribe", { id, modeId });
 /** Returns the recording's WAV bytes for in-webview playback. */
 export const readAudio = (id: number) => invoke<number[]>("read_audio", { id });
+
+// --- Storage ---
+export const storageStats = () => invoke<StorageStats>("storage_stats");
+export const purgeRecordings = (olderThanDays: number, keepFavorites: boolean) =>
+  invoke<number>("purge_recordings", { olderThanDays, keepFavorites });
 
 // --- Config (also persisted JS-side via the store; this re-reads Rust's view) ---
 export const getConfig = () => invoke<Config>("get_config");

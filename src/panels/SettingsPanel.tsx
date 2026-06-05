@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Segmented, Toggle } from "../components/Primitives";
 import { ShortcutRecorder } from "../components/ShortcutRecorder";
@@ -10,11 +10,13 @@ import {
   setApiKey,
   deleteApiKey,
   openPermissionSettings,
+  purgeRecordings,
   requestAccessibility,
   requestMicrophone,
   requestNotificationPermission,
+  storageStats,
 } from "../lib/ipc";
-import type { CaptureMode, PermissionStatus } from "../lib/types";
+import type { CaptureMode, DeleteBehavior, PermissionStatus, StorageStats } from "../lib/types";
 import {
   costLabel,
   modelById,
@@ -204,6 +206,99 @@ export function SettingsPanel({
           labels={[t("settings.on"), t("settings.off")]}
           disabled={recording}
         />
+      </div>
+
+      <StorageSection
+        deleteBehavior={config.deleteBehavior}
+        onDeleteBehavior={(v) => set("deleteBehavior", v)}
+        recording={recording}
+      />
+    </div>
+  );
+}
+
+const fmtMB = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+
+/** Storage: disk used, delete-behavior, and a retention purge. Lives in the
+ *  current (flat) Settings page; Step 5 moves it into the sectioned layout. */
+function StorageSection({
+  deleteBehavior,
+  onDeleteBehavior,
+  recording,
+}: {
+  deleteBehavior: DeleteBehavior;
+  onDeleteBehavior: (v: DeleteBehavior) => void;
+  recording: boolean;
+}) {
+  const [stats, setStats] = useState<StorageStats | null>(null);
+  const [days, setDays] = useState(30);
+  const [keepFav, setKeepFav] = useState(true);
+  const [purging, setPurging] = useState(false);
+
+  const refresh = () => storageStats().then(setStats).catch(() => {});
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  async function purge() {
+    if (recording) return;
+    setPurging(true);
+    try {
+      await purgeRecordings(days, keepFav);
+      refresh();
+    } catch (e) {
+      console.error("purge failed", e);
+    } finally {
+      setPurging(false);
+    }
+  }
+
+  return (
+    <div className="set-row">
+      <div className="set-label">
+        {t("settings.storage")}{" "}
+        <span className="set-sub">
+          {stats
+            ? t("settings.storageUsed", { size: fmtMB(stats.totalBytes), n: stats.recordingCount })
+            : ""}
+        </span>
+      </div>
+
+      <div className="set-row inline" style={{ marginTop: 4 }}>
+        <div className="set-label" style={{ marginBottom: 0 }}>
+          {t("settings.deleteBehavior")} <span className="set-sub">{t("settings.deleteBehaviorSub")}</span>
+        </div>
+        <Segmented<DeleteBehavior>
+          value={deleteBehavior}
+          options={[
+            { value: "both", label: t("settings.deleteBoth") },
+            { value: "transcript", label: t("settings.deleteKeepAudio") },
+          ]}
+          onChange={onDeleteBehavior}
+          disabled={recording}
+        />
+      </div>
+
+      <div className="storage-purge">
+        <span className="set-sub">{t("settings.purgeOlder")}</span>
+        <input
+          className="storage-days"
+          type="number"
+          min={1}
+          value={days}
+          disabled={recording}
+          onChange={(e) => setDays(Math.max(1, Number(e.target.value) || 1))}
+        />
+        <span className="set-sub">{t("settings.purgeDays")}</span>
+        <Toggle
+          on={keepFav}
+          onToggle={() => setKeepFav((v) => !v)}
+          labels={[t("settings.purgeKeepFav"), t("settings.purgeAll")]}
+          disabled={recording}
+        />
+        <button type="button" className="pc-btn danger-btn" onClick={purge} disabled={purging || recording}>
+          {purging ? t("settings.purging") : t("settings.purge")}
+        </button>
       </div>
     </div>
   );
