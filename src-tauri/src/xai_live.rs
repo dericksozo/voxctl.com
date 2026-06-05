@@ -89,49 +89,50 @@ fn pcm16_le(samples: &[i16]) -> Vec<u8> {
     bytes
 }
 
-/// Accumulates streamed events into the final transcript. The xAI stream emits
-/// FULL per-segment text on each `transcript.partial`: interim ones (cumulative
-/// within the current segment) are a live preview; `is_final` ones lock a
-/// segment. The full transcript is the locked segments joined. The server emits
-/// `is_final` twice per segment (speech_final false then true) with identical
-/// text, so consecutive duplicate finals are dropped.
+/// Accumulates streamed events into the final transcript.
+///
+/// xAI finalizes in two overlapping layers (see docs.x.ai): rough "chunk final"
+/// segments (`is_final=true, speech_final=false`) emitted ~every 3s while you
+/// speak, then a single refined "utterance final" (`speech_final=true`) that
+/// RE-TRANSCRIBES the whole utterance with proper formatting. Committing both
+/// duplicates each utterance, so we commit ONLY on `speech_final=true` (the
+/// refined version) and treat everything else as a live preview. If recording
+/// stops before an utterance finalizes, the last preview is kept as the tail.
 #[derive(Default)]
 struct Accumulator {
-    segments: Vec<String>,
-    interim: String,
+    committed: Vec<String>,
+    preview_tail: String,
 }
 
 impl Accumulator {
-    fn lock_segment(&mut self, text: &str) {
+    /// Observe a partial. `speech_final` segments are the refined utterance and
+    /// are committed; chunk-finals and interims only update the live preview.
+    fn observe(&mut self, text: &str, speech_final: bool) {
         let text = text.trim();
-        if text.is_empty() {
-            return;
-        }
-        if self.segments.last().map(String::as_str) != Some(text) {
-            self.segments.push(text.to_string());
-        }
-    }
-
-    fn partial(&mut self, text: &str, is_final: bool) {
-        if is_final {
-            self.lock_segment(text);
-            self.interim.clear();
+        if speech_final {
+            if !text.is_empty() && self.committed.last().map(String::as_str) != Some(text) {
+                self.committed.push(text.to_string());
+            }
+            self.preview_tail.clear();
         } else {
-            self.interim = text.trim().to_string();
+            self.preview_tail = text.to_string();
         }
     }
 
     fn done(&mut self, text: &str) {
-        // Usually empty (just a completion signal); add a tail if one is carried.
-        self.lock_segment(text);
-        self.interim.clear();
+        // transcript.done is usually empty (a completion signal). If it ever
+        // carries a tail, treat it as a final utterance; otherwise keep the
+        // preview tail as a fallback for audio that stopped mid-utterance.
+        if !text.trim().is_empty() {
+            self.observe(text, true);
+        }
     }
 
-    /// Locked segments plus any in-progress interim, space-joined.
+    /// Committed utterances plus any in-progress preview, space-joined.
     fn joined(&self) -> String {
-        let mut parts: Vec<&str> = self.segments.iter().map(String::as_str).collect();
-        if !self.interim.is_empty() {
-            parts.push(self.interim.as_str());
+        let mut parts: Vec<&str> = self.committed.iter().map(String::as_str).collect();
+        if !self.preview_tail.is_empty() {
+            parts.push(self.preview_tail.as_str());
         }
         parts.join(" ").trim().to_string()
     }
@@ -176,8 +177,14 @@ fn handle_frame(
     match v.get("type").and_then(Value::as_str).unwrap_or("") {
         "transcript.partial" => {
             let text = v.get("text").and_then(Value::as_str).unwrap_or("");
-            let is_final = v.get("is_final").and_then(Value::as_bool).unwrap_or(false);
-            acc.partial(text, is_final);
+            // Only `speech_final` segments are the refined utterance we keep;
+            // chunk-finals (is_final=true, speech_final=false) are still rough
+            // previews that the utterance-final supersedes.
+            let speech_final = v
+                .get("speech_final")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            acc.observe(text, speech_final);
             on_delta(acc.preview());
             Ok(Flow::Continue)
         }
@@ -310,35 +317,45 @@ mod tests {
     }
 
     #[test]
-    fn interim_is_cumulative_preview_then_locks() {
+    fn only_speech_final_commits_refined_utterance() {
+        // The rough chunk-final (speech_final=false) is a preview; only the
+        // refined utterance-final (speech_final=true) is kept — so the two-pass
+        // duplication never reaches the transcript.
         let mut a = Accumulator::default();
-        a.partial("the quick", false); // interim (cumulative within segment)
-        a.partial("the quick brown fox", false);
-        assert_eq!(a.preview(), "the quick brown fox");
-        a.partial("the quick brown fox.", true); // segment locked
-        assert_eq!(a.final_text(), "the quick brown fox.");
+        a.observe("today i'm testing", false); // interim
+        a.observe("today i'm testing vox control.", false); // chunk-final (rough) as preview
+        assert_eq!(a.preview(), "today i'm testing vox control.");
+        a.observe("Today I'm testing VoxCTL.", true); // refined utterance final
+        a.done("");
+        assert_eq!(a.final_text(), "Today I'm testing VoxCTL.");
     }
 
     #[test]
-    fn duplicate_final_segment_is_dropped() {
-        // The server emits is_final twice per segment (speech_final false→true).
+    fn multiple_utterances_concatenate() {
         let mut a = Accumulator::default();
-        a.partial("First sentence about apples.", true);
-        a.partial("First sentence about apples.", true); // duplicate
-        a.partial("Second sentence about oranges.", true);
-        a.done(""); // empty completion signal
-        assert_eq!(
-            a.final_text(),
-            "First sentence about apples. Second sentence about oranges."
-        );
+        a.observe("first interim", false);
+        a.observe("First utterance.", true);
+        a.observe("second interim", false);
+        a.observe("Second utterance.", true);
+        assert_eq!(a.final_text(), "First utterance. Second utterance.");
     }
 
     #[test]
-    fn trailing_interim_kept_if_stream_ends_without_final() {
+    fn duplicate_speech_final_is_dropped() {
         let mut a = Accumulator::default();
-        a.partial("locked one.", true);
-        a.partial("unfinished tail", false);
-        assert_eq!(a.final_text(), "locked one. unfinished tail");
+        a.observe("Hello there.", true);
+        a.observe("Hello there.", true); // server repeats the utterance final
+        assert_eq!(a.final_text(), "Hello there.");
+    }
+
+    #[test]
+    fn trailing_preview_kept_without_speech_final() {
+        // Recording stopped mid-utterance: keep the last preview as the tail.
+        let mut a = Accumulator::default();
+        a.observe("Committed one.", true);
+        a.observe("unfinished tail", false);
+        a.done(""); // empty done must not drop the tail
+        assert_eq!(a.final_text(), "Committed one. unfinished tail");
     }
 
     /// Live streaming smoke test. Streams a WAV's PCM to the xAI WS and prints
