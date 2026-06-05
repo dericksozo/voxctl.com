@@ -27,6 +27,14 @@ pub struct Config {
     pub notify_on_mode_switch: bool,
     pub app_locale: String,
     pub default_language: Option<String>,
+    /// What `×` removes from a recording: "both" (row + WAV) or "transcript"
+    /// (row only, keep the WAV on disk). Defaulted for configs saved earlier.
+    #[serde(default = "default_delete_behavior")]
+    pub delete_behavior: String,
+}
+
+fn default_delete_behavior() -> String {
+    "both".into()
 }
 
 impl Default for Config {
@@ -39,6 +47,7 @@ impl Default for Config {
             notify_on_mode_switch: false,
             app_locale: "en".into(),
             default_language: None,
+            delete_behavior: default_delete_behavior(),
         }
     }
 }

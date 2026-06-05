@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { t } from "../i18n";
-import { langLabel, LANGUAGES } from "../lib/languages";
+import { langLabel } from "../lib/languages";
 import {
   deleteRecording,
+  deleteRecordings,
   incrementCopy,
   retranscribe,
   toggleFavorite,
 } from "../lib/ipc";
-import type { HistoryItem } from "../lib/types";
+import type { HistoryItem, Mode } from "../lib/types";
+import { modelById, type Registry } from "../lib/registry";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -29,6 +31,13 @@ const timeLabel = (ts: number) => {
 };
 const durLabel = (s: number) => `${Math.floor(s / 60)}:${pad(Math.round(s % 60))}`;
 const fmtCount = (n: number) => (n >= 10 ? "10+" : String(n));
+
+function fmtBytes(n: number): string {
+  if (n <= 0) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 /** A chip describing a non-done transcription state, or null when done. */
 function statusChip(status: string): { label: string; cls: string } | null {
@@ -66,11 +75,17 @@ type ActiveAudio = {
 
 export function HistoryPanel({
   history,
+  modes,
+  registry,
   onChange,
+  go,
   stopToken = 0,
 }: {
   history: HistoryItem[];
+  modes: Mode[];
+  registry: Registry | null;
   onChange: () => void;
+  go: (panel: string) => void;
   stopToken?: number;
 }) {
   const [expanded, setExpanded] = useState<number | null>(null);
@@ -78,6 +93,14 @@ export function HistoryPanel({
   const [playing, setPlaying] = useState<number | null>(null);
   const [rerunFor, setRerunFor] = useState<number | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
+  // Search / filter
+  const [query, setQuery] = useState("");
+  const [appFilter, setAppFilter] = useState("");
+  const [langFilter, setLangFilter] = useState("");
+  const [favOnly, setFavOnly] = useState(false);
+  // Bulk selection
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const copyTref = useRef<number | undefined>(undefined);
   const audioRef = useRef<ActiveAudio | null>(null);
   const playSeq = useRef(0);
@@ -170,19 +193,60 @@ export function HistoryPanel({
     }
   }
 
-  async function doRetranscribe(e: React.MouseEvent, item: HistoryItem, lang: string) {
+  async function doRerun(e: React.MouseEvent, item: HistoryItem, modeId: string) {
     e.stopPropagation();
     setBusy(item.id);
     setRerunFor(null);
     try {
-      await retranscribe(item.id, lang === "auto" ? null : lang);
+      await retranscribe(item.id, modeId);
       onChange();
     } catch (err) {
-      console.error("retranscribe failed", err);
+      console.error("re-run failed", err);
     } finally {
       setBusy(null);
     }
   }
+
+  function toggleSelect(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function deleteSelected() {
+    if (selected.size === 0) return;
+    try {
+      await deleteRecordings([...selected]);
+      onChange();
+    } catch {
+      /* ignore */
+    }
+    setSelected(new Set());
+    setSelectMode(false);
+  }
+
+  // File-capable modes are the only ones that can re-transcribe a saved file.
+  const fileModes = modes.filter((m) => modelById(registry, m.model)?.canFile);
+  const modeLabel = (m: Mode) => `${m.name} · ${modelById(registry, m.model)?.label ?? m.model}`;
+
+  // Distinct apps/languages present, for the filter dropdowns.
+  const apps = [...new Set(history.map((h) => h.appName || h.website).filter(Boolean))] as string[];
+  const langs = [...new Set(history.map((h) => h.language).filter(Boolean))];
+
+  const q = query.trim().toLowerCase();
+  const filtered = history.filter((h) => {
+    if (favOnly && !h.favorite) return false;
+    if (appFilter && (h.appName || h.website || "") !== appFilter) return false;
+    if (langFilter && h.language !== langFilter) return false;
+    if (q) {
+      const hay = `${h.transcript} ${h.appName ?? ""} ${h.website ?? ""} ${h.modeName}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
 
   if (history.length === 0) {
     return (
@@ -193,7 +257,7 @@ export function HistoryPanel({
   }
 
   const groups: { day: string; items: HistoryItem[] }[] = [];
-  for (const item of history) {
+  for (const item of filtered) {
     const day = dayLabel(item.createdAt);
     const g = groups.find((x) => x.day === day);
     if (g) g.items.push(item);
@@ -202,101 +266,182 @@ export function HistoryPanel({
 
   return (
     <div className="panel-body files">
-      {groups.map((g) => (
-        <div className="file-group" key={g.day}>
-          <div className="file-group-head">{g.day}</div>
-          {g.items.map((item) => {
-            const exp = expanded === item.id;
-            const cp = copied === item.id;
-            const ctx = item.appName || item.website;
-            const sc = statusChip(item.status);
-            return (
-              <div
-                key={item.id}
-                className={"file-card" + (exp ? " expanded" : "")}
-                onClick={() => setExpanded(exp ? null : item.id)}
-              >
-                <div className="file-head">
-                  <div className="file-head-left">
-                    <span className="file-time">{timeLabel(item.createdAt)}</span>
-                    {item.favorite ? <span className="mode-badge">★</span> : null}
-                  </div>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    {sc ? <span className={"file-chip" + sc.cls}>{sc.label}</span> : null}
-                    {item.modeName && item.modeName !== "—" ? (
-                      <span className="file-chip mode">▸ {item.modeName.toUpperCase()}</span>
-                    ) : null}
-                    {ctx ? <span className="file-chip ctx">{ctx.toUpperCase()}</span> : null}
-                    <span className="file-chip">{langLabel(item.language)}</span>
-                  </div>
-                </div>
-                <p className={"file-preview" + (item.transcript?.trim() ? "" : " placeholder")}>
-                  {previewText(item)}
-                </p>
-                <div className="file-foot">
-                  <div className="file-actions">
-                    <button type="button" className={"fa" + (cp ? " copied" : "")} onClick={(e) => doCopy(e, item)}>
-                      {cp ? "✓ " + t("history.copied") : "⧉ " + t("history.copy")}
-                      {item.copyCount > 0 ? <span className="count">{fmtCount(item.copyCount)}</span> : null}
-                    </button>
-                    <button type="button" className="fa" onClick={(e) => doPlay(e, item)}>
-                      {playing === item.id ? "■ " + t("history.stop") : "▶ " + t("history.play")}
-                    </button>
-                    <button
-                      type="button"
-                      className={"fa" + (item.favorite ? " fav" : "")}
-                      onClick={(e) => doFavorite(e, item)}
-                    >
-                      {item.favorite ? "★" : "☆"} {t("history.favorite")}
-                    </button>
-                    {rerunFor === item.id ? (
-                      <select
-                        className="set-select"
-                        style={{ width: "auto", padding: "4px 8px" }}
-                        autoFocus
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => doRetranscribe(e as unknown as React.MouseEvent, item, e.target.value)}
-                        defaultValue=""
-                      >
-                        <option value="" disabled>
-                          LANG…
-                        </option>
-                        {LANGUAGES.map((l) => (
-                          <option key={l.code} value={l.code}>
-                            {l.label}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <button
-                        type="button"
-                        className="fa"
-                        disabled={busy === item.id}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setRerunFor(item.id);
-                        }}
-                      >
-                        {busy === item.id ? "↻ …" : "↻ " + t("history.retranscribe")}
-                      </button>
-                    )}
-                    <button type="button" className="fa danger" onClick={(e) => doDelete(e, item)}>
-                      ✕
-                    </button>
-                  </div>
-                  <div className="file-meta2">
-                    <span>{durLabel(item.durationSecs)}</span>
-                    <span>
-                      {item.words} {t("history.words")}
-                    </span>
-                    <span className="file-exp">⌄</span>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+      <div className="files-toolbar">
+        <input
+          className="files-search"
+          value={query}
+          placeholder={t("history.search")}
+          spellCheck={false}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        {apps.length > 0 ? (
+          <select className="files-filter" value={appFilter} onChange={(e) => setAppFilter(e.target.value)}>
+            <option value="">{t("history.filterApp")}</option>
+            {apps.map((a) => (
+              <option key={a} value={a}>
+                {a.toUpperCase()}
+              </option>
+            ))}
+          </select>
+        ) : null}
+        {langs.length > 1 ? (
+          <select className="files-filter" value={langFilter} onChange={(e) => setLangFilter(e.target.value)}>
+            <option value="">{t("history.filterLang")}</option>
+            {langs.map((l) => (
+              <option key={l} value={l}>
+                {langLabel(l)}
+              </option>
+            ))}
+          </select>
+        ) : null}
+        <button
+          type="button"
+          className={"files-chip" + (favOnly ? " on" : "")}
+          onClick={() => setFavOnly((v) => !v)}
+        >
+          ★ {t("history.filterFav")}
+        </button>
+        <button
+          type="button"
+          className={"files-chip" + (selectMode ? " on" : "")}
+          onClick={() => {
+            setSelectMode((v) => !v);
+            setSelected(new Set());
+          }}
+        >
+          {t("history.select")}
+        </button>
+      </div>
+
+      {selectMode ? (
+        <div className="files-selbar">
+          <span>{t("history.selectedCount", { n: selected.size })}</span>
+          <button type="button" className="fa danger" disabled={selected.size === 0} onClick={deleteSelected}>
+            ✕ {t("history.deleteSelected")}
+          </button>
         </div>
-      ))}
+      ) : null}
+
+      {groups.length === 0 ? (
+        <div className="empty">{t("history.noMatches")}</div>
+      ) : (
+        groups.map((g) => (
+          <div className="file-group" key={g.day}>
+            <div className="file-group-head">{g.day}</div>
+            {g.items.map((item) => {
+              const exp = expanded === item.id;
+              const cp = copied === item.id;
+              const ctx = item.appName || item.website;
+              const sc = statusChip(item.status);
+              const sel = selected.has(item.id);
+              const size = fmtBytes(item.audioBytes);
+              return (
+                <div
+                  key={item.id}
+                  className={"file-card" + (exp ? " expanded" : "") + (sel ? " selected" : "")}
+                  onClick={() => (selectMode ? toggleSelect(item.id) : setExpanded(exp ? null : item.id))}
+                >
+                  <div className="file-head">
+                    <div className="file-head-left">
+                      {selectMode ? <span className="file-check">{sel ? "☑" : "☐"}</span> : null}
+                      <span className="file-time">{timeLabel(item.createdAt)}</span>
+                      {item.favorite ? <span className="mode-badge">★</span> : null}
+                    </div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {sc ? <span className={"file-chip" + sc.cls}>{sc.label}</span> : null}
+                      {item.modeName && item.modeName !== "—" ? (
+                        <span className="file-chip mode">▸ {item.modeName.toUpperCase()}</span>
+                      ) : null}
+                      {ctx ? <span className="file-chip ctx">{ctx.toUpperCase()}</span> : null}
+                      <span className="file-chip">{langLabel(item.language)}</span>
+                    </div>
+                  </div>
+                  <p className={"file-preview" + (item.transcript?.trim() ? "" : " placeholder")}>
+                    {previewText(item)}
+                  </p>
+                  {selectMode ? null : (
+                    <div className="file-foot">
+                      <div className="file-actions">
+                        <button type="button" className={"fa" + (cp ? " copied" : "")} onClick={(e) => doCopy(e, item)}>
+                          {cp ? "✓ " + t("history.copied") : "⧉ " + t("history.copy")}
+                          {item.copyCount > 0 ? <span className="count">{fmtCount(item.copyCount)}</span> : null}
+                        </button>
+                        <button type="button" className="fa" onClick={(e) => doPlay(e, item)}>
+                          {playing === item.id ? "■ " + t("history.stop") : "▶ " + t("history.play")}
+                        </button>
+                        <button
+                          type="button"
+                          className={"fa" + (item.favorite ? " fav" : "")}
+                          onClick={(e) => doFavorite(e, item)}
+                        >
+                          {item.favorite ? "★" : "☆"} {t("history.favorite")}
+                        </button>
+                        {rerunFor === item.id ? (
+                          fileModes.length > 0 ? (
+                            <select
+                              className="set-select"
+                              style={{ width: "auto", padding: "4px 8px" }}
+                              title={t("history.rerunHeadline")}
+                              autoFocus
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => doRerun(e as unknown as React.MouseEvent, item, e.target.value)}
+                              defaultValue=""
+                            >
+                              <option value="" disabled>
+                                {t("history.rerunPick")}
+                              </option>
+                              {fileModes.map((m) => (
+                                <option key={m.id} value={m.id}>
+                                  {modeLabel(m)}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <button
+                              type="button"
+                              className="fa"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setRerunFor(null);
+                                go("modes");
+                              }}
+                            >
+                              ＋ {t("history.rerunCreate")}
+                            </button>
+                          )
+                        ) : (
+                          <button
+                            type="button"
+                            className="fa"
+                            disabled={busy === item.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRerunFor(item.id);
+                            }}
+                          >
+                            {busy === item.id ? "↻ …" : "↻ " + t("history.retranscribe")}
+                          </button>
+                        )}
+                        <button type="button" className="fa danger" onClick={(e) => doDelete(e, item)}>
+                          ✕
+                        </button>
+                      </div>
+                      <div className="file-meta2">
+                        <span>{durLabel(item.durationSecs)}</span>
+                        <span>
+                          {item.words} {t("history.words")}
+                        </span>
+                        {size ? <span>{size}</span> : null}
+                        <span className="file-exp">⌄</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ))
+      )}
     </div>
   );
 }

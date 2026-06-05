@@ -174,7 +174,16 @@ export default function App() {
       case "home":
         return <HomePanel history={history} go={switchTo} />;
       case "history":
-        return <HistoryPanel history={history} onChange={refreshHistory} stopToken={audioStopToken} />;
+        return (
+          <HistoryPanel
+            history={history}
+            modes={modes}
+            registry={registry}
+            onChange={refreshHistory}
+            go={switchTo}
+            stopToken={audioStopToken}
+          />
+        );
       case "modes":
         return (
           <ModesPanel

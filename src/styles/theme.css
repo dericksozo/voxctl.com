@@ -692,6 +692,77 @@ button.mode-pill {
   flex-direction: column;
   gap: 5px;
 }
+/* ---- Files toolbar: search / filters / bulk-select ---- */
+.files-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.files-search {
+  flex: 1;
+  min-width: 160px;
+  background: #fff;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  padding: 8px 10px;
+}
+.files-search:focus {
+  outline: none;
+  border-color: var(--pink);
+}
+.files-filter {
+  background: #fff;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  padding: 7px 8px;
+}
+.files-chip {
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--gray);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  padding: 7px 10px;
+}
+.files-chip:hover {
+  border-color: var(--pink);
+  color: var(--pink);
+}
+.files-chip.on {
+  border-color: var(--pink);
+  color: var(--pink);
+  background: color-mix(in srgb, var(--pink) 8%, transparent);
+}
+.files-selbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border: 1px solid color-mix(in srgb, var(--pink) 40%, var(--line));
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: var(--ink-soft);
+}
+.file-card.selected {
+  border-color: var(--pink);
+  background: color-mix(in srgb, var(--pink) 6%, transparent);
+}
+.file-check {
+  color: var(--pink);
+  margin-right: 6px;
+}
 .file-group {
   display: flex;
   flex-direction: column;
@@ -1345,6 +1416,35 @@ button.mode-pill {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 22px;
+}
+/* ---- Storage purge controls ---- */
+.storage-purge {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+.storage-days {
+  width: 56px;
+  background: #fff;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 6px 8px;
+  text-align: center;
+}
+.storage-days:focus {
+  outline: none;
+  border-color: var(--pink);
+}
+.pc-btn.danger-btn {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.pc-btn.danger-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 .kbd {
   display: inline-flex;
