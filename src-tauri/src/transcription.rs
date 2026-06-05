@@ -59,19 +59,11 @@ impl OpenAiRealtimeTranscriber {
     /// Open a live transcription session: connect the WebSocket and start a
     /// background task that streams audio in as it's captured and finalizes on
     /// stop. Audio is pushed via the returned [`RealtimeSession`]; the final
-    /// transcript is awaited with [`RealtimeSession::finish`]. `on_delta` gets
-    /// the running transcript as deltas arrive (used for an optional preview).
-    pub fn open_session<F>(
-        api_key: String,
-        language: Option<String>,
-        on_delta: F,
-    ) -> RealtimeSession
-    where
-        F: Fn(String) + Send + Sync + 'static,
-    {
+    /// transcript is awaited with [`RealtimeSession::finish`].
+    pub fn open_session(api_key: String, language: Option<String>) -> RealtimeSession {
         let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Vec<i16>>();
         let (done_tx, done_rx) = oneshot::channel::<Result<String, String>>();
-        tauri::async_runtime::spawn(session_task(api_key, language, audio_rx, done_tx, on_delta));
+        tauri::async_runtime::spawn(session_task(api_key, language, audio_rx, done_tx));
         RealtimeSession { audio_tx, done_rx }
     }
 }
@@ -114,16 +106,13 @@ impl RealtimeSession {
 /// Background task owning the WebSocket for a live session: appends audio as it
 /// streams in, commits chunks after local silence detection, and waits for any
 /// in-flight transcript items after capture stops.
-async fn session_task<F>(
+async fn session_task(
     api_key: String,
     language: Option<String>,
     mut audio_rx: mpsc::UnboundedReceiver<Vec<i16>>,
     done_tx: oneshot::Sender<Result<String, String>>,
-    on_delta: F,
-) where
-    F: Fn(String) + Send + Sync + 'static,
-{
-    let result = run_session(&api_key, language, &mut audio_rx, &on_delta).await;
+) {
+    let result = run_session(&api_key, language, &mut audio_rx).await;
     let _ = done_tx.send(result);
 }
 
@@ -240,7 +229,6 @@ fn chunk_rms(chunk: &[i16]) -> f32 {
 fn handle_frame(
     frame: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>,
     transcript: &mut LiveTranscript,
-    on_delta: &impl Fn(String),
 ) -> Result<FrameSignal, String> {
     let f = match frame {
         Some(Ok(f)) => f,
@@ -269,7 +257,6 @@ fn handle_frame(
             if let Some(d) = v.get("delta").and_then(Value::as_str) {
                 let item_id = v.get("item_id").and_then(Value::as_str);
                 transcript.push_delta(item_id, d);
-                on_delta(transcript.text());
             }
             Ok(FrameSignal::Continue)
         }
@@ -285,7 +272,6 @@ fn handle_frame(
                 .map(str::to_string)
                 .unwrap_or(fallback);
             transcript.complete(item_id, text);
-            on_delta(transcript.text());
             Ok(FrameSignal::Completed)
         }
         "error" => {
@@ -325,15 +311,11 @@ fn is_empty_commit_error(msg: &str) -> bool {
     msg.contains("commit") && (msg.contains("empty") || msg.contains("no audio"))
 }
 
-async fn run_session<F>(
+async fn run_session(
     api_key: &str,
     language: Option<String>,
     audio_rx: &mut mpsc::UnboundedReceiver<Vec<i16>>,
-    on_delta: &F,
-) -> Result<String, String>
-where
-    F: Fn(String) + Send + Sync + 'static,
-{
+) -> Result<String, String> {
     let mut req = WS_URL
         .into_client_request()
         .map_err(|e| format!("request build: {e}"))?;
@@ -392,7 +374,7 @@ where
                 }
             }
             frame = read.next() => {
-                match handle_frame(frame, &mut transcript, on_delta)? {
+                match handle_frame(frame, &mut transcript)? {
                     FrameSignal::Committed => {}
                     FrameSignal::Completed => pending_commits = pending_commits.saturating_sub(1),
                     FrameSignal::Closed => break,
@@ -407,7 +389,7 @@ where
     // an empty buffer; keep the transcript already produced in that case.
     let read_final = async {
         while pending_commits > 0 || awaiting_final_commit {
-            match handle_frame(read.next().await, &mut transcript, on_delta) {
+            match handle_frame(read.next().await, &mut transcript) {
                 Ok(FrameSignal::Committed) => {
                     awaiting_final_commit = false;
                 }

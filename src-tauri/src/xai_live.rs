@@ -2,8 +2,8 @@
 //!
 //! Protocol (verified against docs.x.ai, June 2026):
 //! - Auth: `Authorization: Bearer <key>` on the upgrade request.
-//! - Config: URL query params only (sample_rate, encoding, interim_results,
-//!   language, diarize, multichannel/channels, keyterm). No setup message.
+//! - Config: URL query params only (sample_rate, encoding, language, diarize,
+//!   multichannel/channels, keyterm). No setup message.
 //! - Client sends raw audio as BINARY frames: signed 16-bit little-endian PCM.
 //! - Client sends `{"type":"audio.done"}` (text) to end audio → `transcript.done`.
 //! - Server events: `transcript.created`, `transcript.partial` (with `text` +
@@ -33,14 +33,11 @@ const READ_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Open a live xAI transcription session. Audio is pushed via the returned
 /// session's `sender()`; the final transcript is awaited with `finish()`.
-pub fn open_session<F>(key: String, opts: TranscribeOptions, on_delta: F) -> RealtimeSession
-where
-    F: Fn(String) + Send + Sync + 'static,
-{
+pub fn open_session(key: String, opts: TranscribeOptions) -> RealtimeSession {
     let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Vec<i16>>();
     let (done_tx, done_rx) = oneshot::channel::<Result<String, String>>();
     tauri::async_runtime::spawn(async move {
-        let result = run_session(&key, &opts, audio_rx, &on_delta).await;
+        let result = run_session(&key, &opts, audio_rx).await;
         let _ = done_tx.send(result);
     });
     RealtimeSession::from_parts(audio_tx, done_rx)
@@ -61,7 +58,7 @@ fn enc(s: &str) -> String {
 }
 
 fn build_url(opts: &TranscribeOptions) -> String {
-    let mut url = format!("{BASE}?sample_rate={SAMPLE_RATE}&encoding=pcm&interim_results=true");
+    let mut url = format!("{BASE}?sample_rate={SAMPLE_RATE}&encoding=pcm");
     if let Some(l) = opts
         .language
         .as_deref()
@@ -137,10 +134,6 @@ impl Accumulator {
         parts.join(" ").trim().to_string()
     }
 
-    fn preview(&self) -> String {
-        self.joined()
-    }
-
     fn final_text(&self) -> String {
         self.joined()
     }
@@ -155,7 +148,6 @@ enum Flow {
 fn handle_frame(
     frame: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>,
     acc: &mut Accumulator,
-    on_delta: &impl Fn(String),
 ) -> Result<Flow, String> {
     let msg = match frame {
         Some(Ok(m)) => m,
@@ -185,13 +177,11 @@ fn handle_frame(
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             acc.observe(text, speech_final);
-            on_delta(acc.preview());
             Ok(Flow::Continue)
         }
         "transcript.done" => {
             let text = v.get("text").and_then(Value::as_str).unwrap_or("");
             acc.done(text);
-            on_delta(acc.preview());
             Ok(Flow::Done)
         }
         "error" => {
@@ -205,15 +195,11 @@ fn handle_frame(
     }
 }
 
-async fn run_session<F>(
+async fn run_session(
     key: &str,
     opts: &TranscribeOptions,
     mut audio_rx: mpsc::UnboundedReceiver<Vec<i16>>,
-    on_delta: &F,
-) -> Result<String, String>
-where
-    F: Fn(String) + Send + Sync + 'static,
-{
+) -> Result<String, String> {
     let mut req = build_url(opts)
         .into_client_request()
         .map_err(|e| format!("xai request build: {e}"))?;
@@ -251,7 +237,7 @@ where
                 }
             },
             frame = read.next() => {
-                match handle_frame(frame, &mut acc, on_delta)? {
+                match handle_frame(frame, &mut acc)? {
                     Flow::Done => {
                         let _ = write.send(Message::Close(None)).await;
                         return Ok(acc.final_text());
@@ -266,7 +252,7 @@ where
     // Phase 2: read until the final transcript (or timeout).
     let drain = async {
         loop {
-            match handle_frame(read.next().await, &mut acc, on_delta)? {
+            match handle_frame(read.next().await, &mut acc)? {
                 Flow::Done | Flow::Closed => return Ok::<String, String>(acc.final_text()),
                 Flow::Continue => {}
             }
@@ -324,7 +310,7 @@ mod tests {
         let mut a = Accumulator::default();
         a.observe("today i'm testing", false); // interim
         a.observe("today i'm testing vox control.", false); // chunk-final (rough) as preview
-        assert_eq!(a.preview(), "today i'm testing vox control.");
+        assert_eq!(a.final_text(), "today i'm testing vox control."); // rough tail before any final
         a.observe("Today I'm testing VoxCTL.", true); // refined utterance final
         a.done("");
         assert_eq!(a.final_text(), "Today I'm testing VoxCTL.");
@@ -380,8 +366,7 @@ mod tests {
         }
         drop(tx);
         let opts = TranscribeOptions::default();
-        let on_delta = |s: String| eprintln!("  delta: {s}");
-        let result = rt.block_on(run_session(&key, &opts, rx, &on_delta));
+        let result = rt.block_on(run_session(&key, &opts, rx));
         eprintln!("FINAL: {result:?}");
         assert!(result.is_ok(), "xai live failed: {result:?}");
         assert!(!result.unwrap().trim().is_empty(), "empty transcript");

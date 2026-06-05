@@ -219,15 +219,6 @@ fn finish_capture(mut cap: Capture) -> (Vec<f32>, u32) {
     (samples, cap.sample_rate)
 }
 
-/// A delta callback that forwards the running transcript to the HUD preview.
-/// Shared by the OpenAI and xAI live-session openers.
-fn delta_emitter(app: &AppHandle) -> impl Fn(String) + Send + Sync + 'static {
-    let app = app.clone();
-    move |text: String| {
-        let _ = app.emit(events::TRANSCRIPT_PARTIAL, events::TranscriptText { text });
-    }
-}
-
 pub fn start(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<RecorderState>();
     let override_lang = {
@@ -263,13 +254,8 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
         (Some("openai"), Some(key)) => Some(OpenAiRealtimeTranscriber::open_session(
             key,
             ctx.options.language.clone(),
-            delta_emitter(app),
         )),
-        (Some("xai"), Some(key)) => Some(crate::xai_live::open_session(
-            key,
-            ctx.options.clone(),
-            delta_emitter(app),
-        )),
+        (Some("xai"), Some(key)) => Some(crate::xai_live::open_session(key, ctx.options.clone())),
         _ => None,
     };
 

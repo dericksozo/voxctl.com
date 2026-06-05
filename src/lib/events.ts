@@ -6,8 +6,6 @@ export const EVT = {
   micLevel: "voxctl:mic-level",
   /** Recording lifecycle: { recording: boolean, language: string | null }. */
   recState: "voxctl:rec-state",
-  /** Live partial transcript preview (HUD only): { text }. */
-  transcriptPartial: "voxctl:transcript-partial",
   /** Final transcript on stop: { text }. */
   transcriptFinal: "voxctl:transcript-final",
   /** Active mode changed (auto-switch or manual): { id, name }. */
