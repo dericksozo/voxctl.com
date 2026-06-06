@@ -99,3 +99,25 @@ const UNIT_SUFFIX: Record<CostUnit, string> = {
 export function costLabel(m: ModelRecord): string {
   return `~$${m.costRate}${UNIT_SUFFIX[m.costUnit]}`;
 }
+
+/** Local cost estimate (USD) for a recording of `durationSecs` on a model.
+ *  Per-minute/hour providers are exact; token-billed models aren't estimated
+ *  from duration (returns 0). */
+export function estimateCost(model: ModelRecord | undefined, durationSecs: number): number {
+  if (!model) return 0;
+  switch (model.costUnit) {
+    case "perHour":
+      return model.costRate * (durationSecs / 3600);
+    case "perMin":
+      return model.costRate * (durationSecs / 60);
+    default:
+      return 0;
+  }
+}
+
+/** Format a USD estimate, flooring tiny non-zero amounts to "<$0.01". */
+export function formatCost(usd: number): string {
+  if (usd <= 0) return "$0.00";
+  if (usd < 0.01) return "<$0.01";
+  return "$" + usd.toFixed(2);
+}

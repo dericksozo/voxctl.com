@@ -506,7 +506,7 @@ button.mode-pill {
 }
 .stat-row {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 14px;
   margin-bottom: 18px;
 }
@@ -933,6 +933,9 @@ button.mode-pill {
   letter-spacing: 0.1em;
   color: var(--gray);
 }
+.file-cost {
+  color: color-mix(in srgb, var(--pink) 65%, var(--gray));
+}
 .file-exp {
   font-size: 13px;
   color: var(--gray);
@@ -1272,7 +1275,23 @@ button.mode-pill {
 .settings {
   display: flex;
   flex-direction: column;
+  gap: 30px;
+}
+/* ---- Sectioned settings (scroll-spy drives the header + SYS.DESC) ---- */
+.set-section {
+  display: flex;
+  flex-direction: column;
   gap: 22px;
+  scroll-margin-top: 8px;
+}
+.set-section-head {
+  font-family: var(--head);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  color: var(--pink);
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--line);
 }
 .set-row.inline {
   display: flex;
