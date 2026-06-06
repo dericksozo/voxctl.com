@@ -55,6 +55,9 @@ export const pinMode = (id: string) => invoke<void>("pin_mode", { id });
 export const unpinMode = () => invoke<void>("unpin_mode");
 /** Designate the priority-3 fallback (non-deletable) mode. */
 export const setDefaultMode = (id: string) => invoke<void>("set_default_mode", { id });
+/** Create/update the onboarding Default Mode from a validated provider key. */
+export const bootstrapDefaultMode = (provider: ProviderId) =>
+  invoke<Mode>("bootstrap_default_mode", { provider });
 
 // --- History ---
 export const listHistory = () => invoke<HistoryItem[]>("list_history");

@@ -10,6 +10,7 @@ import { HomePanel } from "./panels/HomePanel";
 import { HistoryPanel } from "./panels/HistoryPanel";
 import { ModesPanel } from "./panels/ModesPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
+import { OnboardingPanel } from "./panels/OnboardingPanel";
 import { useConfig } from "./hooks/useConfig";
 import { useTauriEvent } from "./hooks/useTauriEvent";
 import { t } from "./i18n";
@@ -53,7 +54,9 @@ export default function App() {
   const [activeMode, setActiveMode] = useState<ActiveMode | null>(null);
   const [registry, setRegistry] = useState<Registry | null>(null);
   const [providers, setProviders] = useState<ProviderStatus>(EMPTY_PROVIDER_STATUS);
+  const [providersReady, setProvidersReady] = useState(false);
   const [perms, setPerms] = useState<PermissionStatus>({ microphone: true, accessibility: true });
+  const [permsReady, setPermsReady] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
   /** Active Settings section (scroll-driven) → header + SYS.DESC. */
@@ -69,10 +72,20 @@ export default function App() {
     listHistory().then(setHistory).catch(() => {});
   }, []);
   const refreshProviders = useCallback(() => {
-    providerStatus().then(setProviders).catch(() => {});
+    providerStatus()
+      .then((s) => {
+        setProviders(s);
+        setProvidersReady(true);
+      })
+      .catch(() => {});
   }, []);
   const refreshPerms = useCallback(() => {
-    getPermissions().then(setPerms).catch(() => {});
+    getPermissions()
+      .then((p) => {
+        setPerms(p);
+        setPermsReady(true);
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -84,6 +97,8 @@ export default function App() {
   }, [refreshModes, refreshHistory, refreshProviders, refreshPerms]);
 
   const apiKeySet = anyKeyValidated(providers);
+  const showOnboarding =
+    ready && providersReady && permsReady && (!config.onboardingCompleted || !perms.microphone || !apiKeySet);
   // SET status: the active mode's model has a validated key (you can dictate now).
   const activeModel = activeMode ? modelById(registry, activeMode.mode.model) : undefined;
   const modeUsable = !!activeModel && providerValidated(providers, activeModel.provider);
@@ -182,6 +197,21 @@ export default function App() {
   }, [permsMissing, refreshPerms]);
 
   function renderPanel() {
+    if (showOnboarding) {
+      return (
+        <OnboardingPanel
+          registry={registry}
+          providers={providers}
+          perms={perms}
+          history={history}
+          recording={recording}
+          refreshProviders={refreshProviders}
+          refreshModes={refreshModes}
+          refreshHistory={refreshHistory}
+          refreshPerms={refreshPerms}
+        />
+      );
+    }
     switch (view) {
       case "home":
         return <HomePanel history={history} registry={registry} go={switchTo} />;
@@ -224,10 +254,14 @@ export default function App() {
     }
   }
 
-  const baseLabel = MENU.find((m) => m.id === view)?.label ?? "";
-  const sectionActive = view === "settings" ? settingsSection : null;
+  const baseLabel = showOnboarding ? t("onboarding.title") : (MENU.find((m) => m.id === view)?.label ?? "");
+  const sectionActive = !showOnboarding && view === "settings" ? settingsSection : null;
   const labelText = "// " + baseLabel + (sectionActive ? " / " + sectionActive.label : "");
-  const descText = sectionActive ? sectionActive.desc : (DESC[view] ?? "");
+  const descText = showOnboarding
+    ? t("onboarding.desc")
+    : sectionActive
+      ? sectionActive.desc
+      : (DESC[view] ?? "");
   const frameCls = "content-frame " + (phase === "closing" ? "closing" : phase === "opening" ? "opening" : "");
 
   return (
@@ -272,7 +306,7 @@ export default function App() {
                 <li key={m.id}>
                   <button
                     type="button"
-                    className={"nav-item" + (m.id === view ? " active" : "")}
+                    className={"nav-item" + (!showOnboarding && m.id === view ? " active" : "")}
                     onClick={() => switchTo(m.id)}
                   >
                     <span className="cursor">↵</span>

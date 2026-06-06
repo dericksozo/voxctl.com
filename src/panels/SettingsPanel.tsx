@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { ProviderKeyCard } from "../components/ProviderKeyCard";
 import { Segmented, Toggle } from "../components/Primitives";
 import { ShortcutRecorder } from "../components/ShortcutRecorder";
 import { useConfig } from "../hooks/useConfig";
@@ -7,8 +8,6 @@ import { t } from "../i18n";
 import { AVAILABLE_LOCALES } from "../i18n";
 import { LANGUAGES } from "../lib/languages";
 import {
-  setApiKey,
-  deleteApiKey,
   openPermissionSettings,
   purgeRecordings,
   requestAccessibility,
@@ -18,11 +17,7 @@ import {
 } from "../lib/ipc";
 import type { CaptureMode, DeleteBehavior, PermissionStatus, StorageStats } from "../lib/types";
 import {
-  costLabel,
-  modelById,
   providerValidated,
-  type ProviderId,
-  type ProviderRecord,
   type ProviderStatus,
   type Registry,
 } from "../lib/registry";
@@ -106,7 +101,7 @@ export function SettingsPanel({
           </div>
           <div className="prov-list">
             {(registry?.providers ?? []).map((p) => (
-              <ProviderRow
+              <ProviderKeyCard
                 key={p.id}
                 provider={p}
                 registry={registry}
@@ -359,101 +354,6 @@ function StorageSection({
         <button type="button" className="pc-btn danger-btn" onClick={purge} disabled={purging || recording}>
           {purging ? t("settings.purging") : t("settings.purge")}
         </button>
-      </div>
-    </div>
-  );
-}
-
-/** One provider's key row: stored/validated status, key entry + validate/save,
- *  the auto-selected default model (read-only), and a docs link. Keys are
- *  validated in Rust and only stored when valid — an invalid key shows red. */
-function ProviderRow({
-  provider,
-  registry,
-  validated,
-  recording,
-  onChanged,
-}: {
-  provider: ProviderRecord;
-  registry: Registry | null;
-  validated: boolean;
-  recording: boolean;
-  onChanged: () => void;
-}) {
-  const [draft, setDraft] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const defaultModel = modelById(registry, provider.defaultModelId);
-
-  async function save() {
-    if (recording) return;
-    const k = draft.trim();
-    setSaving(true);
-    setErr(null);
-    try {
-      if (k) await setApiKey(provider.id as ProviderId, k);
-      else await deleteApiKey(provider.id as ProviderId);
-      setDraft("");
-    } catch (e) {
-      const msg = String(e);
-      setErr(
-        msg.includes("invalid")
-          ? t("settings.keyInvalid")
-          : msg.includes("unreachable")
-            ? t("settings.keyUnreachable")
-            : t("settings.keyError"),
-      );
-    } finally {
-      setSaving(false);
-      // Re-read the true backend status after EVERY attempt (not just success):
-      // an invalid key clears any stored key, so the row + header must update.
-      onChanged();
-    }
-  }
-
-  // Error (just-rejected key) takes visual priority over the stored state, so a
-  // bad entry never keeps looking validated.
-  const rowState = err ? "err" : validated ? "ok" : "none";
-
-  return (
-    <div className={"prov-row " + rowState}>
-      <div className="prov-head">
-        <span className="prov-name">
-          <span className={"prov-dot " + (err ? "err" : validated ? "on" : "off")} />
-          {provider.label}
-        </span>
-        {defaultModel ? (
-          <span className="prov-model">
-            {defaultModel.label} <span className="dim">{costLabel(defaultModel)}</span>
-          </span>
-        ) : null}
-        <button
-          type="button"
-          className="prov-docs"
-          onClick={() => openUrl(provider.docsUrl).catch(() => {})}
-        >
-          {t("settings.docs")} ↗
-        </button>
-      </div>
-      <div className="set-key">
-        <input
-          className="key-input"
-          value={draft}
-          disabled={recording}
-          onChange={(e) => {
-            setDraft(e.target.value);
-            if (err) setErr(null);
-          }}
-          type="password"
-          spellCheck={false}
-          placeholder={validated ? "•••••••••••••••• (stored)" : t("settings.keyPlaceholder")}
-        />
-        <button type="button" className="key-eye" onClick={save} disabled={saving || recording}>
-          {saving ? t("settings.validating") : t("settings.save")}
-        </button>
-        <span className={"set-ok" + (err ? " err" : validated ? "" : " bad")}>
-          {err ? "✕ " + err : validated ? "✓ " + t("settings.valid") : t("settings.invalid")}
-        </span>
       </div>
     </div>
   );

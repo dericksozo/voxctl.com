@@ -139,6 +139,7 @@ pub fn run() {
             commands::modes::pin_mode,
             commands::modes::unpin_mode,
             commands::modes::set_default_mode,
+            commands::modes::bootstrap_default_mode,
             commands::audio::start_recording,
             commands::audio::stop_recording,
             commands::audio::set_recording_language,

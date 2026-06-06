@@ -22,6 +22,10 @@ export interface Config {
   defaultLanguage: string | null;
   /** What `×` removes from a recording. */
   deleteBehavior: DeleteBehavior;
+  /** First-run onboarding is complete once mic/key/first recording are done. */
+  onboardingCompleted: boolean;
+  /** User skipped the optional Accessibility step during onboarding. */
+  accessibilitySkipped: boolean;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -33,6 +37,8 @@ export const DEFAULT_CONFIG: Config = {
   appLocale: "en",
   defaultLanguage: null,
   deleteBehavior: "both",
+  onboardingCompleted: false,
+  accessibilitySkipped: false,
 };
 
 export interface Mode {
