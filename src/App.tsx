@@ -26,6 +26,8 @@ import type { ActiveMode, HistoryItem, Mode, PermissionStatus } from "./lib/type
 import {
   anyKeyValidated,
   EMPTY_PROVIDER_STATUS,
+  modelById,
+  providerValidated,
   type ProviderStatus,
   type Registry,
 } from "./lib/registry";
@@ -54,6 +56,8 @@ export default function App() {
   const [perms, setPerms] = useState<PermissionStatus>({ microphone: true, accessibility: true });
   const [toast, setToast] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
+  /** Active Settings section (scroll-driven) → header + SYS.DESC. */
+  const [settingsSection, setSettingsSection] = useState<{ label: string; desc: string } | null>(null);
   const timers = useRef<number[]>([]);
   const toastTimer = useRef<number | undefined>(undefined);
 
@@ -80,6 +84,14 @@ export default function App() {
   }, [refreshModes, refreshHistory, refreshProviders, refreshPerms]);
 
   const apiKeySet = anyKeyValidated(providers);
+  // SET status: the active mode's model has a validated key (you can dictate now).
+  const activeModel = activeMode ? modelById(registry, activeMode.mode.model) : undefined;
+  const modeUsable = !!activeModel && providerValidated(providers, activeModel.provider);
+
+  // The section header/blurb only applies inside Settings.
+  useEffect(() => {
+    if (view !== "settings") setSettingsSection(null);
+  }, [view]);
 
   useTauriEvent<RecState>(EVT.recState, (e) => setRecording(e.recording));
   useTauriEvent<ModeChanged>(EVT.modeChanged, () => refreshModes());
@@ -172,7 +184,7 @@ export default function App() {
   function renderPanel() {
     switch (view) {
       case "home":
-        return <HomePanel history={history} go={switchTo} />;
+        return <HomePanel history={history} registry={registry} go={switchTo} />;
       case "history":
         return (
           <HistoryPanel
@@ -204,6 +216,7 @@ export default function App() {
             perms={perms}
             refreshPerms={refreshPerms}
             recording={recording}
+            onSection={setSettingsSection}
           />
         );
       default:
@@ -211,7 +224,10 @@ export default function App() {
     }
   }
 
-  const labelText = "// " + (MENU.find((m) => m.id === view)?.label ?? "");
+  const baseLabel = MENU.find((m) => m.id === view)?.label ?? "";
+  const sectionActive = view === "settings" ? settingsSection : null;
+  const labelText = "// " + baseLabel + (sectionActive ? " / " + sectionActive.label : "");
+  const descText = sectionActive ? sectionActive.desc : (DESC[view] ?? "");
   const frameCls = "content-frame " + (phase === "closing" ? "closing" : phase === "opening" ? "opening" : "");
 
   return (
@@ -238,14 +254,11 @@ export default function App() {
             <ModeSwitcher modes={modes} active={activeMode} onChange={refreshModes} />
           )}
           <div className="head-stat">
-            {t("header.link")}{" "}
-            <span className={perms.accessibility ? "ok" : "bad"}>
-              {perms.accessibility ? "✓ " + t("header.ok") : "· " + t("header.unset")}
-            </span>{" "}
-            · {t("header.key")}{" "}
-            <span className={apiKeySet ? "ok" : "bad"}>
-              {apiKeySet ? "✓ " + t("header.set") : "· " + t("header.unset")}
-            </span>
+            <StatDot label={t("header.link")} ok={perms.accessibility} onClick={() => switchTo("settings")} />
+            {" · "}
+            <StatDot label={t("header.key")} ok={apiKeySet} onClick={() => switchTo("settings")} />
+            {" · "}
+            <StatDot label={t("header.set")} ok={modeUsable} onClick={() => switchTo("settings")} />
           </div>
         </div>
       </header>
@@ -295,14 +308,18 @@ export default function App() {
 
           <Frame className="sysdesc" label="// SYS.DESC">
             <p className="sysdesc-text">
-              <Typewriter text={DESC[view] ?? ""} run={phase !== "closing"} speed={11} />
+              <Typewriter text={descText} run={phase !== "closing"} speed={11} />
               <span className="caret blink">█</span>
             </p>
           </Frame>
         </div>
 
         <div className="stage">
-          <Frame className={frameCls} label={labelText} tr="VX-0xA7">
+          <Frame
+            className={frameCls}
+            label={<Typewriter text={labelText} run={phase !== "closing"} speed={11} />}
+            tr="VX-0xA7"
+          >
             <div className="content">{renderPanel()}</div>
           </Frame>
         </div>
@@ -339,5 +356,15 @@ export default function App() {
 
       {import.meta.env.DEV ? <TweaksPanel theme={theme} onChange={setTheme} /> : null}
     </div>
+  );
+}
+
+/** A clickable header status indicator (LINK / KEY / SET). Red items jump to
+ *  their fix in Settings. */
+function StatDot({ label, ok, onClick }: { label: string; ok: boolean; onClick: () => void }) {
+  return (
+    <button type="button" className="linklike" onClick={onClick}>
+      {label} <span className={ok ? "ok" : "bad"}>{ok ? "✓" : "·"}</span>
+    </button>
   );
 }

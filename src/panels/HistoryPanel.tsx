@@ -10,7 +10,7 @@ import {
   toggleFavorite,
 } from "../lib/ipc";
 import type { HistoryItem, Mode } from "../lib/types";
-import { modelById, type Registry } from "../lib/registry";
+import { estimateCost, formatCost, modelById, type Registry } from "../lib/registry";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -335,6 +335,8 @@ export function HistoryPanel({
               const sc = statusChip(item.status);
               const sel = selected.has(item.id);
               const size = fmtBytes(item.audioBytes);
+              const costVal = estimateCost(modelById(registry, item.modelId), item.durationSecs);
+              const cost = costVal > 0 ? formatCost(costVal) : "";
               return (
                 <div
                   key={item.id}
@@ -432,6 +434,7 @@ export function HistoryPanel({
                           {item.words} {t("history.words")}
                         </span>
                         {size ? <span>{size}</span> : null}
+                        {cost ? <span className="file-cost">{cost}</span> : null}
                         <span className="file-exp">⌄</span>
                       </div>
                     </div>

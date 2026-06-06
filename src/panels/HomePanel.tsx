@@ -1,11 +1,26 @@
 import { Card } from "../components/Primitives";
 import { t } from "../i18n";
 import type { HistoryItem } from "../lib/types";
+import { estimateCost, formatCost, modelById, type Registry } from "../lib/registry";
 
 /** Usage overview computed from real history. Zeros on first run (honest). */
-export function HomePanel({ history, go }: { history: HistoryItem[]; go: (panel: string) => void }) {
+export function HomePanel({
+  history,
+  registry,
+  go,
+}: {
+  history: HistoryItem[];
+  registry: Registry | null;
+  go: (panel: string) => void;
+}) {
   const words = history.reduce((s, h) => s + h.words, 0);
   const minutes = Math.round(history.reduce((s, h) => s + h.durationSecs, 0) / 60);
+  // All-time local cost estimate (duration × model rate). Never the provider's
+  // billing API — just a trust signal for a BYOK app.
+  const totalCost = history.reduce(
+    (s, h) => s + estimateCost(modelById(registry, h.modelId), h.durationSecs),
+    0,
+  );
 
   const counts = new Map<string, number>();
   for (const h of history) {
@@ -22,6 +37,7 @@ export function HomePanel({ history, go }: { history: HistoryItem[]; go: (panel:
     { k: t("home.words"), v: words.toLocaleString(), d: `${history.length} RECORDINGS` },
     { k: t("home.minutes"), v: String(minutes), d: `≈ ${(minutes / 60).toFixed(1)} HRS` },
     { k: t("home.interfaces"), v: String(counts.size).padStart(2, "0"), d: "DISTINCT APPS" },
+    { k: t("home.spend"), v: formatCost(totalCost), d: t("home.spendSub") },
   ];
   const start = [
     { t: t("home.start.shortcut.t"), d: t("home.start.shortcut.d"), to: "settings" },

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Segmented, Toggle } from "../components/Primitives";
 import { ShortcutRecorder } from "../components/ShortcutRecorder";
@@ -27,6 +27,18 @@ import {
   type Registry,
 } from "../lib/registry";
 
+/** Settings sections, in scroll order. Drives the scroll-spy that updates the
+ *  content-frame header (`// SETTINGS / …`) and the SYS.DESC blurb. */
+const SECTIONS: { id: string; label: string; desc: string }[] = [
+  { id: "providers", label: "settings.sec.providers", desc: "settings.sec.providersDesc" },
+  { id: "capture", label: "settings.sec.capture", desc: "settings.sec.captureDesc" },
+  { id: "transcription", label: "settings.sec.transcription", desc: "settings.sec.transcriptionDesc" },
+  { id: "audio", label: "settings.sec.audio", desc: "settings.sec.audioDesc" },
+  { id: "storage", label: "settings.sec.storage", desc: "settings.sec.storageDesc" },
+  { id: "system", label: "settings.sec.system", desc: "settings.sec.systemDesc" },
+  { id: "about", label: "settings.sec.about", desc: "settings.sec.aboutDesc" },
+];
+
 export function SettingsPanel({
   registry,
   providers,
@@ -34,6 +46,7 @@ export function SettingsPanel({
   perms,
   refreshPerms,
   recording,
+  onSection,
 }: {
   registry: Registry | null;
   providers: ProviderStatus;
@@ -41,10 +54,11 @@ export function SettingsPanel({
   perms: PermissionStatus;
   refreshPerms: () => void;
   recording: boolean;
+  onSection: (s: { label: string; desc: string } | null) => void;
 }) {
   const { config, set } = useConfig();
-
-  const permsMissing = !perms.microphone || !perms.accessibility;
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const lastSec = useRef("");
 
   // Notifications are OFF by default. Turning them ON triggers the macOS
   // permission prompt; only persist ON if the user actually grants it.
@@ -58,10 +72,164 @@ export function SettingsPanel({
     set("notifyOnModeSwitch", granted);
   }
 
+  // Scroll-spy: report the section nearest the top of the scroll container so the
+  // header (`// SETTINGS / …`) and SYS.DESC track what you're looking at.
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const report = () => {
+      const line = el.getBoundingClientRect().top + 90;
+      let active = SECTIONS[0];
+      for (const s of SECTIONS) {
+        const node = el.querySelector<HTMLElement>(`[data-sec="${s.id}"]`);
+        if (node && node.getBoundingClientRect().top <= line) active = s;
+      }
+      if (active.id !== lastSec.current) {
+        lastSec.current = active.id;
+        onSection({ label: t(active.label), desc: t(active.desc) });
+      }
+    };
+    report();
+    el.addEventListener("scroll", report, { passive: true });
+    return () => el.removeEventListener("scroll", report);
+  }, [onSection]);
+
   return (
-    <div className="panel-body settings">
+    <div className="panel-body settings" ref={bodyRef}>
       {recording ? <div className="set-hint">RECORDING IN PROGRESS</div> : null}
-      {permsMissing ? (
+
+      <section className="set-section" data-sec="providers">
+        <div className="set-section-head">{t("settings.sec.providers")}</div>
+        <div className="set-row">
+          <div className="set-label">
+            {t("settings.providers")} <span className="set-sub">{t("settings.byok")}</span>
+          </div>
+          <div className="prov-list">
+            {(registry?.providers ?? []).map((p) => (
+              <ProviderRow
+                key={p.id}
+                provider={p}
+                registry={registry}
+                validated={providerValidated(providers, p.id)}
+                recording={recording}
+                onChanged={refreshProviders}
+              />
+            ))}
+          </div>
+          <div className="set-hint">{t("settings.keyHint")}</div>
+        </div>
+      </section>
+
+      <section className="set-section" data-sec="capture">
+        <div className="set-section-head">{t("settings.sec.capture")}</div>
+        <div className="set-row">
+          <div className="set-label">{t("settings.capture")}</div>
+          <Segmented<CaptureMode>
+            value={config.captureMode}
+            options={[
+              { value: "toggle", label: t("settings.toggle") },
+              { value: "ptt", label: t("settings.ptt") },
+            ]}
+            onChange={(v) => set("captureMode", v, { reloadShortcut: true })}
+            disabled={recording}
+          />
+          <div className="set-hint">
+            {config.captureMode === "toggle" ? t("settings.captureHint.toggle") : t("settings.captureHint.ptt")}
+          </div>
+        </div>
+        <div className="set-row">
+          <div className="set-label">{t("settings.shortcut")}</div>
+          <ShortcutRecorder
+            value={config.shortcut}
+            onChange={(s) => set("shortcut", s, { reloadShortcut: true })}
+            disabled={recording}
+          />
+        </div>
+      </section>
+
+      <section className="set-section" data-sec="transcription">
+        <div className="set-section-head">{t("settings.sec.transcription")}</div>
+        <div className="set-row">
+          <div className="set-label">{t("settings.transcriptionLanguage")}</div>
+          <select
+            className="set-select"
+            value={config.defaultLanguage ?? "auto"}
+            onChange={(e) => set("defaultLanguage", e.target.value === "auto" ? null : e.target.value)}
+            disabled={recording}
+          >
+            {LANGUAGES.map((l) => (
+              <option key={l.code} value={l.code}>
+                {l.code === "auto" ? t("settings.autoDetect") : l.label}
+              </option>
+            ))}
+          </select>
+          <div className="set-hint">{t("settings.alwaysSave")}</div>
+        </div>
+      </section>
+
+      <section className="set-section" data-sec="audio">
+        <div className="set-section-head">{t("settings.sec.audio")}</div>
+        <div className="set-row inline">
+          <div className="set-label">
+            {t("settings.sfx")} <span className="set-sub">{t("settings.sfxSub")}</span>
+          </div>
+          <Toggle
+            on={config.sfxEnabled}
+            onToggle={() => set("sfxEnabled", !config.sfxEnabled)}
+            labels={[t("settings.sfxOn"), t("settings.sfxOff")]}
+            disabled={recording}
+          />
+        </div>
+        <div className="set-row inline">
+          <div className="set-label">
+            {t("settings.notify")} <span className="set-sub">{t("settings.notifySub")}</span>
+          </div>
+          <Toggle
+            on={config.notifyOnModeSwitch}
+            onToggle={toggleNotify}
+            labels={[t("settings.on"), t("settings.off")]}
+            disabled={recording}
+          />
+        </div>
+      </section>
+
+      <section className="set-section" data-sec="storage">
+        <div className="set-section-head">{t("settings.sec.storage")}</div>
+        <StorageSection
+          deleteBehavior={config.deleteBehavior}
+          onDeleteBehavior={(v) => set("deleteBehavior", v)}
+          recording={recording}
+        />
+      </section>
+
+      <section className="set-section" data-sec="system">
+        <div className="set-section-head">{t("settings.sec.system")}</div>
+        <div className="set-row inline">
+          <div className="set-label">
+            {t("settings.clipboard")} <span className="set-sub">{t("settings.clipboardSub")}</span>
+          </div>
+          <Toggle
+            on={config.copyToClipboard}
+            onToggle={() => set("copyToClipboard", !config.copyToClipboard)}
+            labels={[t("settings.on"), t("settings.off")]}
+            disabled={recording}
+          />
+        </div>
+        <div className="set-row">
+          <div className="set-label">{t("settings.appLanguage")}</div>
+          <select
+            className="set-select"
+            value={config.appLocale}
+            onChange={(e) => set("appLocale", e.target.value)}
+            disabled={recording}
+          >
+            {AVAILABLE_LOCALES.map((l) => (
+              <option key={l.code} value={l.code}>
+                {l.label}
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="set-row">
           <div className="set-label">
             {t("perm.title")} <span className="set-sub">{t("perm.banner")}</span>
@@ -90,137 +258,29 @@ export function SettingsPanel({
             </button>
           </div>
         </div>
-      ) : null}
+      </section>
 
-      <div className="set-row">
-        <div className="set-label">
-          {t("settings.providers")} <span className="set-sub">{t("settings.byok")}</span>
-        </div>
-        <div className="prov-list">
-          {(registry?.providers ?? []).map((p) => (
-            <ProviderRow
-              key={p.id}
-              provider={p}
-              registry={registry}
-              validated={providerValidated(providers, p.id)}
-              recording={recording}
-              onChanged={refreshProviders}
-            />
-          ))}
-        </div>
-        <div className="set-hint">{t("settings.keyHint")}</div>
-      </div>
-
-      <div className="set-row">
-        <div className="set-label">{t("settings.capture")}</div>
-        <Segmented<CaptureMode>
-          value={config.captureMode}
-          options={[
-            { value: "toggle", label: t("settings.toggle") },
-            { value: "ptt", label: t("settings.ptt") },
-          ]}
-          onChange={(v) => set("captureMode", v, { reloadShortcut: true })}
-          disabled={recording}
-        />
-        <div className="set-hint">
-          {config.captureMode === "toggle" ? t("settings.captureHint.toggle") : t("settings.captureHint.ptt")}
-        </div>
-      </div>
-
-      <div className="set-grid">
-        <div className="set-cell">
-          <div className="set-label">{t("settings.shortcut")}</div>
-          <ShortcutRecorder
-            value={config.shortcut}
-            onChange={(s) => set("shortcut", s, { reloadShortcut: true })}
-            disabled={recording}
-          />
-        </div>
-        <div className="set-cell">
-          <div className="set-label">{t("settings.transcriptionLanguage")}</div>
-          <select
-            className="set-select"
-            value={config.defaultLanguage ?? "auto"}
-            onChange={(e) => set("defaultLanguage", e.target.value === "auto" ? null : e.target.value)}
-            disabled={recording}
+      <section className="set-section" data-sec="about">
+        <div className="set-section-head">{t("settings.sec.about")}</div>
+        <div className="set-row">
+          <div className="set-label">{t("settings.aboutLine")}</div>
+          <button
+            type="button"
+            className="prov-docs"
+            style={{ marginLeft: 0 }}
+            onClick={() => openUrl("https://docs.voxctl.com").catch(() => {})}
           >
-            {LANGUAGES.map((l) => (
-              <option key={l.code} value={l.code}>
-                {l.code === "auto" ? t("settings.autoDetect") : l.label}
-              </option>
-            ))}
-          </select>
+            {t("settings.docs")} ↗
+          </button>
         </div>
-      </div>
-
-      <div className="set-grid">
-        <div className="set-cell">
-          <div className="set-label">{t("settings.appLanguage")}</div>
-          <select
-            className="set-select"
-            value={config.appLocale}
-            onChange={(e) => set("appLocale", e.target.value)}
-            disabled={recording}
-          >
-            {AVAILABLE_LOCALES.map((l) => (
-              <option key={l.code} value={l.code}>
-                {l.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="set-cell" />
-      </div>
-
-      <div className="set-row inline">
-        <div className="set-label">
-          {t("settings.sfx")} <span className="set-sub">{t("settings.sfxSub")}</span>
-        </div>
-        <Toggle
-          on={config.sfxEnabled}
-          onToggle={() => set("sfxEnabled", !config.sfxEnabled)}
-          labels={[t("settings.sfxOn"), t("settings.sfxOff")]}
-          disabled={recording}
-        />
-      </div>
-
-      <div className="set-row inline">
-        <div className="set-label">
-          {t("settings.clipboard")} <span className="set-sub">{t("settings.clipboardSub")}</span>
-        </div>
-        <Toggle
-          on={config.copyToClipboard}
-          onToggle={() => set("copyToClipboard", !config.copyToClipboard)}
-          labels={[t("settings.on"), t("settings.off")]}
-          disabled={recording}
-        />
-      </div>
-
-      <div className="set-row inline">
-        <div className="set-label">
-          {t("settings.notify")} <span className="set-sub">{t("settings.notifySub")}</span>
-        </div>
-        <Toggle
-          on={config.notifyOnModeSwitch}
-          onToggle={toggleNotify}
-          labels={[t("settings.on"), t("settings.off")]}
-          disabled={recording}
-        />
-      </div>
-
-      <StorageSection
-        deleteBehavior={config.deleteBehavior}
-        onDeleteBehavior={(v) => set("deleteBehavior", v)}
-        recording={recording}
-      />
+      </section>
     </div>
   );
 }
 
 const fmtMB = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 
-/** Storage: disk used, delete-behavior, and a retention purge. Lives in the
- *  current (flat) Settings page; Step 5 moves it into the sectioned layout. */
+/** Storage: disk used, delete-behavior, and a retention purge (Storage section). */
 function StorageSection({
   deleteBehavior,
   onDeleteBehavior,
