@@ -4,13 +4,17 @@
 mod audio_pipeline;
 mod commands;
 mod events;
+mod file_transcribe;
 mod history;
 mod hud;
 mod lang_detect;
 mod platform;
+mod registry;
 mod resample;
+mod retry;
 mod shortcut;
 mod transcription;
+mod xai_live;
 
 use tauri::{
     image::Image,
@@ -85,8 +89,11 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(RecorderState::default())
         .manage(commands::modes::ActiveModeState::default())
+        .manage(retry::RetryState::default())
         .setup(|app| {
             app.manage(history::init(app.handle())?);
+            // Move any pre-multi-provider OpenAI key to its per-provider account.
+            commands::config::migrate_legacy_openai_key();
             setup_tray(app.handle())?;
             shortcut::apply_shortcut(app.handle());
             // Build the recording HUD up front (hidden) so the first record just
@@ -98,6 +105,10 @@ pub fn run() {
             platform::macos::observe_app_switches(move || {
                 commands::modes::refresh_active_mode(&handle);
             });
+
+            // Retry failed transcriptions in the background (and reconcile any
+            // rows interrupted mid-transcription on a previous run).
+            retry::spawn(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -117,11 +128,18 @@ pub fn run() {
             commands::config::has_api_key,
             commands::config::set_api_key,
             commands::config::delete_api_key,
+            commands::config::provider_status,
+            commands::registry::get_registry,
+            commands::registry::refresh_registry,
             commands::modes::list_modes,
             commands::modes::save_mode,
             commands::modes::delete_mode,
             commands::modes::set_mode_enabled,
             commands::modes::get_active_mode,
+            commands::modes::pin_mode,
+            commands::modes::unpin_mode,
+            commands::modes::set_default_mode,
+            commands::modes::bootstrap_default_mode,
             commands::audio::start_recording,
             commands::audio::stop_recording,
             commands::audio::set_recording_language,
@@ -132,9 +150,12 @@ pub fn run() {
             commands::permissions::open_permission_settings,
             commands::history::list_history,
             commands::history::delete_recording,
+            commands::history::delete_recordings,
             commands::history::toggle_favorite,
             commands::history::increment_copy,
             commands::history::read_audio,
+            commands::history::storage_stats,
+            commands::history::purge_recordings,
             commands::transcription::retranscribe,
         ])
         .build(tauri::generate_context!())

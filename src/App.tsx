@@ -5,10 +5,12 @@ import { Clock } from "./components/Clock";
 import { VolumeMeter } from "./components/VolumeMeter";
 import { Typewriter } from "./components/Typewriter";
 import { DEFAULT_THEME, type Theme, TweaksPanel } from "./components/TweaksPanel";
+import { ModeSwitcher } from "./components/ModeSwitcher";
 import { HomePanel } from "./panels/HomePanel";
 import { HistoryPanel } from "./panels/HistoryPanel";
 import { ModesPanel } from "./panels/ModesPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
+import { OnboardingPanel } from "./panels/OnboardingPanel";
 import { useConfig } from "./hooks/useConfig";
 import { useTauriEvent } from "./hooks/useTauriEvent";
 import { t } from "./i18n";
@@ -16,11 +18,20 @@ import { EVT, type BackendError, type ModeChanged, type RecState } from "./lib/e
 import {
   getActiveMode,
   getPermissions,
-  hasApiKey,
+  getRegistry,
   listHistory,
   listModes,
+  providerStatus,
 } from "./lib/ipc";
-import type { HistoryItem, Mode, PermissionStatus } from "./lib/types";
+import type { ActiveMode, HistoryItem, Mode, PermissionStatus } from "./lib/types";
+import {
+  anyKeyValidated,
+  EMPTY_PROVIDER_STATUS,
+  modelById,
+  providerValidated,
+  type ProviderStatus,
+  type Registry,
+} from "./lib/registry";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -40,11 +51,16 @@ export default function App() {
 
   const [modes, setModes] = useState<Mode[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [activeMode, setActiveMode] = useState<Mode | null>(null);
-  const [apiKeySet, setApiKeySet] = useState(false);
+  const [activeMode, setActiveMode] = useState<ActiveMode | null>(null);
+  const [registry, setRegistry] = useState<Registry | null>(null);
+  const [providers, setProviders] = useState<ProviderStatus>(EMPTY_PROVIDER_STATUS);
+  const [providersReady, setProvidersReady] = useState(false);
   const [perms, setPerms] = useState<PermissionStatus>({ microphone: true, accessibility: true });
+  const [permsReady, setPermsReady] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
+  /** Active Settings section (scroll-driven) → header + SYS.DESC. */
+  const [settingsSection, setSettingsSection] = useState<{ label: string; desc: string } | null>(null);
   const timers = useRef<number[]>([]);
   const toastTimer = useRef<number | undefined>(undefined);
 
@@ -55,19 +71,42 @@ export default function App() {
   const refreshHistory = useCallback(() => {
     listHistory().then(setHistory).catch(() => {});
   }, []);
-  const refreshApiKey = useCallback(() => {
-    hasApiKey().then(setApiKeySet).catch(() => {});
+  const refreshProviders = useCallback(() => {
+    providerStatus()
+      .then((s) => {
+        setProviders(s);
+        setProvidersReady(true);
+      })
+      .catch(() => {});
   }, []);
   const refreshPerms = useCallback(() => {
-    getPermissions().then(setPerms).catch(() => {});
+    getPermissions()
+      .then((p) => {
+        setPerms(p);
+        setPermsReady(true);
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
     refreshModes();
     refreshHistory();
-    refreshApiKey();
+    refreshProviders();
     refreshPerms();
-  }, [refreshModes, refreshHistory, refreshApiKey, refreshPerms]);
+    getRegistry().then(setRegistry).catch(() => {});
+  }, [refreshModes, refreshHistory, refreshProviders, refreshPerms]);
+
+  const apiKeySet = anyKeyValidated(providers);
+  const showOnboarding =
+    ready && providersReady && permsReady && (!config.onboardingCompleted || !perms.microphone || !apiKeySet);
+  // SET status: the active mode's model has a validated key (you can dictate now).
+  const activeModel = activeMode ? modelById(registry, activeMode.mode.model) : undefined;
+  const modeUsable = !!activeModel && providerValidated(providers, activeModel.provider);
+
+  // The section header/blurb only applies inside Settings.
+  useEffect(() => {
+    if (view !== "settings") setSettingsSection(null);
+  }, [view]);
 
   useTauriEvent<RecState>(EVT.recState, (e) => setRecording(e.recording));
   useTauriEvent<ModeChanged>(EVT.modeChanged, () => refreshModes());
@@ -87,7 +126,7 @@ export default function App() {
     document.documentElement.style.setProperty("--head", `"${theme.headerFont}", sans-serif`);
   }, [theme]);
 
-  const activeModeName = activeMode?.name ?? "—";
+  const activeModeName = activeMode?.mode.name ?? "—";
   const minutes = Math.round(history.reduce((s, h) => s + h.durationSecs, 0) / 60);
 
   const META: Record<string, string> = {
@@ -158,21 +197,56 @@ export default function App() {
   }, [permsMissing, refreshPerms]);
 
   function renderPanel() {
+    if (showOnboarding) {
+      return (
+        <OnboardingPanel
+          registry={registry}
+          providers={providers}
+          perms={perms}
+          history={history}
+          recording={recording}
+          refreshProviders={refreshProviders}
+          refreshModes={refreshModes}
+          refreshHistory={refreshHistory}
+          refreshPerms={refreshPerms}
+        />
+      );
+    }
     switch (view) {
       case "home":
-        return <HomePanel history={history} go={switchTo} />;
+        return <HomePanel history={history} registry={registry} go={switchTo} />;
       case "history":
-        return <HistoryPanel history={history} onChange={refreshHistory} stopToken={audioStopToken} />;
+        return (
+          <HistoryPanel
+            history={history}
+            modes={modes}
+            registry={registry}
+            onChange={refreshHistory}
+            go={switchTo}
+            stopToken={audioStopToken}
+          />
+        );
       case "modes":
-        return <ModesPanel modes={modes} activeModeId={activeMode?.id ?? null} onChange={refreshModes} />;
+        return (
+          <ModesPanel
+            modes={modes}
+            activeModeId={activeMode?.mode.id ?? null}
+            registry={registry}
+            providers={providers}
+            onChange={refreshModes}
+            go={switchTo}
+          />
+        );
       case "settings":
         return (
           <SettingsPanel
-            apiKeySet={apiKeySet}
-            refreshApiKey={refreshApiKey}
+            registry={registry}
+            providers={providers}
+            refreshProviders={refreshProviders}
             perms={perms}
             refreshPerms={refreshPerms}
             recording={recording}
+            onSection={setSettingsSection}
           />
         );
       default:
@@ -180,7 +254,14 @@ export default function App() {
     }
   }
 
-  const labelText = "// " + (MENU.find((m) => m.id === view)?.label ?? "");
+  const baseLabel = showOnboarding ? t("onboarding.title") : (MENU.find((m) => m.id === view)?.label ?? "");
+  const sectionActive = !showOnboarding && view === "settings" ? settingsSection : null;
+  const labelText = "// " + baseLabel + (sectionActive ? " / " + sectionActive.label : "");
+  const descText = showOnboarding
+    ? t("onboarding.desc")
+    : sectionActive
+      ? sectionActive.desc
+      : (DESC[view] ?? "");
   const frameCls = "content-frame " + (phase === "closing" ? "closing" : phase === "opening" ? "opening" : "");
 
   return (
@@ -204,19 +285,14 @@ export default function App() {
               {t("perm.title")}
             </button>
           ) : (
-            <div className="mode-pill">
-              {t("header.activeMode")} <b>▸ {activeModeName}</b>
-            </div>
+            <ModeSwitcher modes={modes} active={activeMode} onChange={refreshModes} />
           )}
           <div className="head-stat">
-            {t("header.link")}{" "}
-            <span className={perms.accessibility ? "ok" : "bad"}>
-              {perms.accessibility ? "✓ " + t("header.ok") : "· " + t("header.unset")}
-            </span>{" "}
-            · {t("header.key")}{" "}
-            <span className={apiKeySet ? "ok" : "bad"}>
-              {apiKeySet ? "✓ " + t("header.set") : "· " + t("header.unset")}
-            </span>
+            <StatDot label={t("header.link")} ok={perms.accessibility} onClick={() => switchTo("settings")} />
+            {" · "}
+            <StatDot label={t("header.key")} ok={apiKeySet} onClick={() => switchTo("settings")} />
+            {" · "}
+            <StatDot label={t("header.set")} ok={modeUsable} onClick={() => switchTo("settings")} />
           </div>
         </div>
       </header>
@@ -230,7 +306,7 @@ export default function App() {
                 <li key={m.id}>
                   <button
                     type="button"
-                    className={"nav-item" + (m.id === view ? " active" : "")}
+                    className={"nav-item" + (!showOnboarding && m.id === view ? " active" : "")}
                     onClick={() => switchTo(m.id)}
                   >
                     <span className="cursor">↵</span>
@@ -266,14 +342,18 @@ export default function App() {
 
           <Frame className="sysdesc" label="// SYS.DESC">
             <p className="sysdesc-text">
-              <Typewriter text={DESC[view] ?? ""} run={phase !== "closing"} speed={11} />
+              <Typewriter text={descText} run={phase !== "closing"} speed={11} />
               <span className="caret blink">█</span>
             </p>
           </Frame>
         </div>
 
         <div className="stage">
-          <Frame className={frameCls} label={labelText} tr="VX-0xA7">
+          <Frame
+            className={frameCls}
+            label={<Typewriter text={labelText} run={phase !== "closing"} speed={11} />}
+            tr="VX-0xA7"
+          >
             <div className="content">{renderPanel()}</div>
           </Frame>
         </div>
@@ -310,5 +390,15 @@ export default function App() {
 
       {import.meta.env.DEV ? <TweaksPanel theme={theme} onChange={setTheme} /> : null}
     </div>
+  );
+}
+
+/** A clickable header status indicator (LINK / KEY / SET). Red items jump to
+ *  their fix in Settings. */
+function StatDot({ label, ok, onClick }: { label: string; ok: boolean; onClick: () => void }) {
+  return (
+    <button type="button" className="linklike" onClick={onClick}>
+      {label} <span className={ok ? "ok" : "bad"}>{ok ? "✓" : "·"}</span>
+    </button>
   );
 }

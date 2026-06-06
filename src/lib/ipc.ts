@@ -3,12 +3,29 @@
 // stubs from slice 1 so the UI never hits a missing-command runtime error.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { Config, HistoryItem, Mode, PermissionStatus } from "./types";
+import type {
+  ActiveMode,
+  Config,
+  HistoryItem,
+  Mode,
+  PermissionStatus,
+  StorageStats,
+} from "./types";
+import type { ProviderId, ProviderStatus, Registry } from "./registry";
 
-// --- API key (macOS Keychain, Rust-owned) ---
-export const hasApiKey = () => invoke<boolean>("has_api_key");
-export const setApiKey = (key: string) => invoke<void>("set_api_key", { key });
-export const deleteApiKey = () => invoke<void>("delete_api_key");
+// --- Provider/model registry (bundled + remote override, Rust-owned) ---
+export const getRegistry = () => invoke<Registry>("get_registry");
+export const refreshRegistry = () => invoke<Registry>("refresh_registry");
+
+// --- Per-provider API keys (macOS Keychain, Rust-owned) ---
+export const hasApiKey = (provider: ProviderId) =>
+  invoke<boolean>("has_api_key", { provider });
+export const setApiKey = (provider: ProviderId, key: string) =>
+  invoke<void>("set_api_key", { provider, key });
+export const deleteApiKey = (provider: ProviderId) =>
+  invoke<void>("delete_api_key", { provider });
+/** Per-provider key status ("validated" | "none") for the UI. */
+export const providerStatus = () => invoke<ProviderStatus>("provider_status");
 
 // --- Permissions / onboarding ---
 export const getPermissions = () => invoke<PermissionStatus>("get_permissions");
@@ -32,17 +49,32 @@ export const saveMode = (mode: Mode) => invoke<void>("save_mode", { mode });
 export const deleteMode = (id: string) => invoke<void>("delete_mode", { id });
 export const setModeEnabled = (id: string, enabled: boolean) =>
   invoke<void>("set_mode_enabled", { id, enabled });
-export const getActiveMode = () => invoke<Mode | null>("get_active_mode");
+export const getActiveMode = () => invoke<ActiveMode | null>("get_active_mode");
+/** Manually pin a mode (sticky across app switches until unpinned). */
+export const pinMode = (id: string) => invoke<void>("pin_mode", { id });
+export const unpinMode = () => invoke<void>("unpin_mode");
+/** Designate the priority-3 fallback (non-deletable) mode. */
+export const setDefaultMode = (id: string) => invoke<void>("set_default_mode", { id });
+/** Create/update the onboarding Default Mode from a validated provider key. */
+export const bootstrapDefaultMode = (provider: ProviderId) =>
+  invoke<Mode>("bootstrap_default_mode", { provider });
 
 // --- History ---
 export const listHistory = () => invoke<HistoryItem[]>("list_history");
 export const deleteRecording = (id: number) => invoke<void>("delete_recording", { id });
+export const deleteRecordings = (ids: number[]) => invoke<void>("delete_recordings", { ids });
 export const toggleFavorite = (id: number) => invoke<boolean>("toggle_favorite", { id });
 export const incrementCopy = (id: number) => invoke<number>("increment_copy", { id });
-export const retranscribe = (id: number, language: string | null) =>
-  invoke<string>("retranscribe", { id, language });
+/** Re-run a saved recording through a chosen (file-capable) mode. */
+export const retranscribe = (id: number, modeId: string) =>
+  invoke<string>("retranscribe", { id, modeId });
 /** Returns the recording's WAV bytes for in-webview playback. */
 export const readAudio = (id: number) => invoke<number[]>("read_audio", { id });
+
+// --- Storage ---
+export const storageStats = () => invoke<StorageStats>("storage_stats");
+export const purgeRecordings = (olderThanDays: number, keepFavorites: boolean) =>
+  invoke<number>("purge_recordings", { olderThanDays, keepFavorites });
 
 // --- Config (also persisted JS-side via the store; this re-reads Rust's view) ---
 export const getConfig = () => invoke<Config>("get_config");

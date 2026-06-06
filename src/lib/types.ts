@@ -1,6 +1,10 @@
 // Shared data shapes mirrored on the Rust side (serde camelCase).
 
+import type { Capabilities } from "./registry";
+
 export type CaptureMode = "toggle" | "ptt";
+/** What `×` removes: "both" (entry + audio) or "transcript" (entry, keep WAV). */
+export type DeleteBehavior = "both" | "transcript";
 
 /** Non-secret settings, persisted via tauri-plugin-store (settings.json).
  *  The OpenAI API key is NOT here — it lives in the macOS Keychain (Rust-only). */
@@ -16,6 +20,12 @@ export interface Config {
   appLocale: string;
   /** Forced transcription language (ISO-639-1) or null = model auto-detect. */
   defaultLanguage: string | null;
+  /** What `×` removes from a recording. */
+  deleteBehavior: DeleteBehavior;
+  /** First-run onboarding is complete once mic/key/first recording are done. */
+  onboardingCompleted: boolean;
+  /** User skipped the optional Accessibility step during onboarding. */
+  accessibilitySkipped: boolean;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -26,6 +36,9 @@ export const DEFAULT_CONFIG: Config = {
   notifyOnModeSwitch: false,
   appLocale: "en",
   defaultLanguage: null,
+  deleteBehavior: "both",
+  onboardingCompleted: false,
+  accessibilitySkipped: false,
 };
 
 export interface Mode {
@@ -40,10 +53,23 @@ export interface Mode {
   triggerApps: string[];
   /** Website domains that auto-activate this mode (best-effort via AX). */
   triggerWebsites: string[];
-  /** Transcription model id. v1 = "gpt-realtime-whisper". */
+  /** Transcription model id (must exist in the registry). */
   model: string;
+  /** User-enabled subset of the model's declared capabilities. */
+  capabilities: Capabilities;
   builtin: boolean;
 }
+
+/** Why a mode is currently active. */
+export type ActiveReason = "pinned" | "auto" | "default";
+
+export interface ActiveMode {
+  mode: Mode;
+  reason: ActiveReason;
+}
+
+/** Lifecycle of a recording's transcription. */
+export type RecordingStatus = "transcribing" | "done" | "failed" | "needs_transcription";
 
 export interface HistoryItem {
   id: number;
@@ -60,6 +86,18 @@ export interface HistoryItem {
   copyCount: number;
   /** Absolute path to the stored WAV (read via a Rust command for playback). */
   audioPath: string;
+  status: RecordingStatus;
+  /** Registry model id used for this recording (drives cost + re-run). */
+  modelId: string;
+  /** Size of the saved WAV on disk, in bytes (0 if the file is gone). */
+  audioBytes: number;
+}
+
+/** Disk usage of the recordings directory (Storage section). */
+export interface StorageStats {
+  totalBytes: number;
+  fileCount: number;
+  recordingCount: number;
 }
 
 export interface PermissionStatus {

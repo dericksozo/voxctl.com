@@ -27,14 +27,19 @@ pub struct Capture {
     join: Option<JoinHandle<()>>,
 }
 
-/// Context captured at record start, attached to the saved history row.
-/// Slice 6 fills app_name/website/mode_name from frontmost-app detection.
+/// Context captured at record start, attached to the saved history row and used
+/// to drive transcription (which provider/model + capability settings).
 #[derive(Default, Clone)]
 pub struct RecordingContext {
     pub language: Option<String>,
     pub app_name: Option<String>,
     pub website: Option<String>,
     pub mode_name: Option<String>,
+    /// Resolved active-mode model id (registry).
+    pub model_id: String,
+    /// Effective transcription settings for the file path (language + keywords
+    /// + capability toggles, intersected with model support).
+    pub options: crate::file_transcribe::TranscribeOptions,
 }
 
 #[derive(Default)]
@@ -228,27 +233,37 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
     let ctx = crate::commands::modes::resolve_context(app, override_lang);
     let language = ctx.language.clone();
 
-    // Open a live transcription session (when a key exists). Audio streams to
-    // OpenAI while recording; local silence detection commits chunks so most
-    // transcription work happens before the user stops. The captured audio is
-    // still buffered locally for the WAV regardless of streaming.
-    let session_bits = match crate::commands::config::get_api_key() {
-        Some(key) => {
-            let app_delta = app.clone();
-            let session = OpenAiRealtimeTranscriber::open_session(
-                key,
-                language.clone(),
-                move |text: String| {
-                    let _ =
-                        app_delta.emit(events::TRANSCRIPT_PARTIAL, events::TranscriptText { text });
-                },
-            );
-            let pcm_tx = session.sender();
-            let (raw_tx, raw_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
-            Some((session, raw_tx, raw_rx, pcm_tx))
-        }
-        None => None,
+    // Decide the transcription path from the active mode's model. Live-capable
+    // models stream while recording (lowest latency) — OpenAI realtime and xAI
+    // Grok STT (WebSocket); every other model is transcribed from the saved WAV
+    // on stop (see audio_pipeline). Audio is buffered locally for the WAV
+    // regardless of which path runs.
+    let reg = crate::registry::effective(app);
+    let model = reg.model_by_id(&ctx.model_id);
+    let provider = model.map(|m| m.provider.clone());
+    let can_live = model.map(|m| m.can_live).unwrap_or(false);
+    let live_key = if can_live {
+        provider
+            .as_deref()
+            .and_then(crate::commands::config::get_api_key)
+    } else {
+        None
     };
+
+    let session = match (provider.as_deref(), live_key) {
+        (Some("openai"), Some(key)) => Some(OpenAiRealtimeTranscriber::open_session(
+            key,
+            ctx.options.language.clone(),
+        )),
+        (Some("xai"), Some(key)) => Some(crate::xai_live::open_session(key, ctx.options.clone())),
+        _ => None,
+    };
+
+    let session_bits = session.map(|session| {
+        let pcm_tx = session.sender();
+        let (raw_tx, raw_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
+        (session, raw_tx, raw_rx, pcm_tx)
+    });
 
     let capture_raw_tx = session_bits
         .as_ref()

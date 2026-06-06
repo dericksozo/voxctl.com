@@ -27,51 +27,26 @@ use tokio_tungstenite::{
 const WS_URL: &str = "wss://api.openai.com/v1/realtime?intent=transcription";
 const MODEL: &str = "gpt-realtime-whisper";
 const TRANSCRIPTION_DELAY: &str = "low";
-/// ~0.67 s of 24 kHz audio per append message.
-const APPEND_SAMPLES: usize = 16000;
 const SAMPLE_RATE: usize = 24000;
 const MANUAL_COMMIT_SILENCE_MS: u32 = 1500;
 const MANUAL_COMMIT_SILENCE_SAMPLES: usize = SAMPLE_RATE * MANUAL_COMMIT_SILENCE_MS as usize / 1000;
 const MANUAL_COMMIT_RMS_THRESHOLD: f32 = 0.01;
 const READ_TIMEOUT: Duration = Duration::from_secs(45);
 
-#[async_trait::async_trait]
-pub trait Transcriber: Send + Sync {
-    /// Transcribe 24 kHz mono PCM16. `language` None/"auto" => model auto-detect.
-    /// `on_delta` receives the running transcript for live preview.
-    async fn transcribe(
-        &self,
-        pcm16: &[i16],
-        language: Option<&str>,
-        on_delta: &(dyn Fn(String) + Send + Sync),
-    ) -> Result<String, String>;
-}
-
-pub struct OpenAiRealtimeTranscriber {
-    api_key: String,
-}
+/// Namespace for the OpenAI realtime live-transcription session opener. Saved
+/// recordings are re-transcribed via the REST file transcribers (`file_transcribe`),
+/// not this realtime path.
+pub struct OpenAiRealtimeTranscriber;
 
 impl OpenAiRealtimeTranscriber {
-    pub fn new(api_key: String) -> Self {
-        Self { api_key }
-    }
-
     /// Open a live transcription session: connect the WebSocket and start a
     /// background task that streams audio in as it's captured and finalizes on
     /// stop. Audio is pushed via the returned [`RealtimeSession`]; the final
-    /// transcript is awaited with [`RealtimeSession::finish`]. `on_delta` gets
-    /// the running transcript as deltas arrive (used for an optional preview).
-    pub fn open_session<F>(
-        api_key: String,
-        language: Option<String>,
-        on_delta: F,
-    ) -> RealtimeSession
-    where
-        F: Fn(String) + Send + Sync + 'static,
-    {
+    /// transcript is awaited with [`RealtimeSession::finish`].
+    pub fn open_session(api_key: String, language: Option<String>) -> RealtimeSession {
         let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Vec<i16>>();
         let (done_tx, done_rx) = oneshot::channel::<Result<String, String>>();
-        tauri::async_runtime::spawn(session_task(api_key, language, audio_rx, done_tx, on_delta));
+        tauri::async_runtime::spawn(session_task(api_key, language, audio_rx, done_tx));
         RealtimeSession { audio_tx, done_rx }
     }
 }
@@ -83,6 +58,16 @@ pub struct RealtimeSession {
 }
 
 impl RealtimeSession {
+    /// Construct a session from raw channel ends. Lets other providers' live
+    /// transcribers (e.g. xAI's WebSocket task in `xai_live`) reuse the same
+    /// handle the audio pipeline already drives.
+    pub(crate) fn from_parts(
+        audio_tx: mpsc::UnboundedSender<Vec<i16>>,
+        done_rx: oneshot::Receiver<Result<String, String>>,
+    ) -> Self {
+        Self { audio_tx, done_rx }
+    }
+
     /// A cloneable sender for pushing 24 kHz mono PCM16 chunks into the session.
     /// While any sender is alive the session keeps accepting audio; when the last
     /// one drops, the background task commits and finalizes.
@@ -104,16 +89,13 @@ impl RealtimeSession {
 /// Background task owning the WebSocket for a live session: appends audio as it
 /// streams in, commits chunks after local silence detection, and waits for any
 /// in-flight transcript items after capture stops.
-async fn session_task<F>(
+async fn session_task(
     api_key: String,
     language: Option<String>,
     mut audio_rx: mpsc::UnboundedReceiver<Vec<i16>>,
     done_tx: oneshot::Sender<Result<String, String>>,
-    on_delta: F,
-) where
-    F: Fn(String) + Send + Sync + 'static,
-{
-    let result = run_session(&api_key, language, &mut audio_rx, &on_delta).await;
+) {
+    let result = run_session(&api_key, language, &mut audio_rx).await;
     let _ = done_tx.send(result);
 }
 
@@ -230,7 +212,6 @@ fn chunk_rms(chunk: &[i16]) -> f32 {
 fn handle_frame(
     frame: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>,
     transcript: &mut LiveTranscript,
-    on_delta: &impl Fn(String),
 ) -> Result<FrameSignal, String> {
     let f = match frame {
         Some(Ok(f)) => f,
@@ -259,7 +240,6 @@ fn handle_frame(
             if let Some(d) = v.get("delta").and_then(Value::as_str) {
                 let item_id = v.get("item_id").and_then(Value::as_str);
                 transcript.push_delta(item_id, d);
-                on_delta(transcript.text());
             }
             Ok(FrameSignal::Continue)
         }
@@ -275,7 +255,6 @@ fn handle_frame(
                 .map(str::to_string)
                 .unwrap_or(fallback);
             transcript.complete(item_id, text);
-            on_delta(transcript.text());
             Ok(FrameSignal::Completed)
         }
         "error" => {
@@ -315,15 +294,11 @@ fn is_empty_commit_error(msg: &str) -> bool {
     msg.contains("commit") && (msg.contains("empty") || msg.contains("no audio"))
 }
 
-async fn run_session<F>(
+async fn run_session(
     api_key: &str,
     language: Option<String>,
     audio_rx: &mut mpsc::UnboundedReceiver<Vec<i16>>,
-    on_delta: &F,
-) -> Result<String, String>
-where
-    F: Fn(String) + Send + Sync + 'static,
-{
+) -> Result<String, String> {
     let mut req = WS_URL
         .into_client_request()
         .map_err(|e| format!("request build: {e}"))?;
@@ -382,7 +357,7 @@ where
                 }
             }
             frame = read.next() => {
-                match handle_frame(frame, &mut transcript, on_delta)? {
+                match handle_frame(frame, &mut transcript)? {
                     FrameSignal::Committed => {}
                     FrameSignal::Completed => pending_commits = pending_commits.saturating_sub(1),
                     FrameSignal::Closed => break,
@@ -397,7 +372,7 @@ where
     // an empty buffer; keep the transcript already produced in that case.
     let read_final = async {
         while pending_commits > 0 || awaiting_final_commit {
-            match handle_frame(read.next().await, &mut transcript, on_delta) {
+            match handle_frame(read.next().await, &mut transcript) {
                 Ok(FrameSignal::Committed) => {
                     awaiting_final_commit = false;
                 }
@@ -472,108 +447,6 @@ fn session_update(language: Option<&str>) -> Value {
     })
 }
 
-#[async_trait::async_trait]
-impl Transcriber for OpenAiRealtimeTranscriber {
-    async fn transcribe(
-        &self,
-        pcm16: &[i16],
-        language: Option<&str>,
-        on_delta: &(dyn Fn(String) + Send + Sync),
-    ) -> Result<String, String> {
-        if pcm16.is_empty() {
-            return Err("no audio captured".into());
-        }
-
-        let mut req = WS_URL
-            .into_client_request()
-            .map_err(|e| format!("request build: {e}"))?;
-        let auth = format!("Bearer {}", self.api_key);
-        req.headers_mut().insert(
-            "authorization",
-            auth.parse()
-                .map_err(|_| "invalid auth header".to_string())?,
-        );
-
-        let (ws, _resp) = connect_async(req)
-            .await
-            .map_err(|e| format!("websocket connect failed: {e}"))?;
-        let (mut write, mut read) = ws.split();
-
-        // Configure the transcription session.
-        write
-            .send(Message::Text(session_update(language).to_string()))
-            .await
-            .map_err(|e| format!("send session.update: {e}"))?;
-
-        // Stream the captured audio, then commit so the model finalizes.
-        for chunk in pcm16.chunks(APPEND_SAMPLES) {
-            let msg =
-                json!({ "type": "input_audio_buffer.append", "audio": pcm16_to_base64(chunk) });
-            write
-                .send(Message::Text(msg.to_string()))
-                .await
-                .map_err(|e| format!("send audio: {e}"))?;
-        }
-        write
-            .send(Message::Text(
-                json!({ "type": "input_audio_buffer.commit" }).to_string(),
-            ))
-            .await
-            .map_err(|e| format!("send commit: {e}"))?;
-
-        // Read until the final transcript (or timeout).
-        let mut running = String::new();
-        let read_loop = async {
-            while let Some(frame) = read.next().await {
-                let frame = frame.map_err(|e| format!("ws read: {e}"))?;
-                if frame.is_close() {
-                    break;
-                }
-                let Ok(txt) = frame.to_text() else { continue };
-                let Ok(v) = serde_json::from_str::<Value>(txt) else {
-                    continue;
-                };
-                match v.get("type").and_then(Value::as_str).unwrap_or("") {
-                    "conversation.item.input_audio_transcription.delta" => {
-                        if let Some(d) = v.get("delta").and_then(Value::as_str) {
-                            running.push_str(d);
-                            on_delta(running.clone());
-                        }
-                    }
-                    "conversation.item.input_audio_transcription.completed" => {
-                        let text = v
-                            .get("transcript")
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                            .unwrap_or_else(|| running.clone());
-                        return Ok(text);
-                    }
-                    "error" => {
-                        let msg = v
-                            .get("error")
-                            .and_then(|e| e.get("message"))
-                            .and_then(Value::as_str)
-                            .unwrap_or("unknown error");
-                        return Err(format!("api error: {msg}"));
-                    }
-                    _ => {}
-                }
-            }
-            if running.is_empty() {
-                Err("connection closed before transcript".to_string())
-            } else {
-                Ok(running.clone())
-            }
-        };
-
-        let result = timeout(READ_TIMEOUT, read_loop)
-            .await
-            .map_err(|_| "transcription timed out".to_string())?;
-        let _ = write.send(Message::Close(None)).await;
-        result
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -627,61 +500,5 @@ mod tests {
         assert!(!detector.observe(&speech));
         assert!(!detector.observe(&almost_silence_window));
         assert!(detector.observe(&last_silent_sample));
-    }
-
-    /// Minimal WAV (PCM16) reader: find the `data` chunk and read i16 LE samples.
-    fn read_wav_pcm16(path: &str) -> Vec<i16> {
-        let bytes = std::fs::read(path).expect("read wav");
-        let mut i = 12; // skip RIFF header
-        while i + 8 <= bytes.len() {
-            let id = &bytes[i..i + 4];
-            let size = u32::from_le_bytes([bytes[i + 4], bytes[i + 5], bytes[i + 6], bytes[i + 7]])
-                as usize;
-            if id == b"data" {
-                let start = i + 8;
-                let end = (start + size).min(bytes.len());
-                return bytes[start..end]
-                    .chunks_exact(2)
-                    .map(|c| i16::from_le_bytes([c[0], c[1]]))
-                    .collect();
-            }
-            i += 8 + size + (size & 1);
-        }
-        panic!("no data chunk in {path}");
-    }
-
-    /// Live end-to-end check against the real API. Gated on env so it never runs
-    /// in normal `cargo test`. Run with:
-    ///   OPENAI_API_KEY=… VOXCTL_TEST_WAV=/tmp/x.wav \
-    ///   cargo test --lib transcription::tests::live_transcribe -- --ignored --nocapture
-    #[test]
-    #[ignore]
-    fn live_transcribe() {
-        let key = match std::env::var("OPENAI_API_KEY") {
-            Ok(k) if !k.is_empty() => k,
-            _ => {
-                eprintln!("skip: OPENAI_API_KEY not set");
-                return;
-            }
-        };
-        let wav = std::env::var("VOXCTL_TEST_WAV").expect("set VOXCTL_TEST_WAV");
-        let pcm16 = read_wav_pcm16(&wav);
-        eprintln!(
-            "loaded {} samples (~{:.1}s @24k)",
-            pcm16.len(),
-            pcm16.len() as f32 / 24000.0
-        );
-
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let t = OpenAiRealtimeTranscriber::new(key);
-        let on_delta = |s: String| eprintln!("  delta: {s}");
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let result = rt.block_on(t.transcribe(&pcm16, None, &on_delta));
-        eprintln!("RESULT: {result:?}");
-        assert!(result.is_ok(), "transcription failed: {result:?}");
-        assert!(!result.unwrap().trim().is_empty(), "empty transcript");
     }
 }

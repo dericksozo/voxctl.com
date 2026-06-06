@@ -1,6 +1,12 @@
-//! Context "Modes" — presets that bind {language, keyword steering, triggers}.
-//! Persisted in the shared store under "modes"; seeded with built-in presets on
-//! first read. Active-mode resolution (frontmost app/website) arrives in slice 6.
+//! Context "Modes" — presets that bind {model + capabilities, language, keyword
+//! steering, app/website triggers}. Persisted in the shared store under "modes".
+//!
+//! Exactly one mode is active at any instant, resolved by priority:
+//!   1. Manual pin (sticky across app switches until unpinned)
+//!   2. Auto match (frontmost app / URL matches an *enabled* mode's triggers)
+//!   3. Default mode (the priority-3 fallback)
+//!
+//! Disabled modes never auto-match.
 
 use std::sync::Mutex;
 
@@ -12,16 +18,25 @@ use super::config::{load_config, STORE_FILE};
 use crate::commands::audio::RecordingContext;
 use crate::events;
 use crate::platform::macos;
+use crate::registry::{self, Capabilities};
 
 const SELF_BUNDLE: &str = "com.derick.voxctlcom";
 
-/// Currently active mode name, tracked in the background as the frontmost app
-/// changes. Used to drive the tray title and the header indicator.
-#[derive(Default)]
-pub struct ActiveModeState(pub Mutex<Option<String>>);
-
 const KEY: &str = "modes";
-const MODEL: &str = "gpt-realtime-whisper";
+/// Store keys for the active-mode resolution inputs.
+const PINNED_KEY: &str = "pinnedModeId";
+const DEFAULT_KEY: &str = "defaultModeId";
+/// Ultimate fallback model when a mode references one the registry doesn't know.
+const DEFAULT_MODEL: &str = "gpt-realtime-whisper";
+/// Onboarding-created fallback mode. It is the one mode every user should have
+/// after adding their first provider key.
+const ONBOARDING_DEFAULT_ID: &str = "default";
+
+/// The currently active mode, cached as (mode id, reason). Kept fresh by the
+/// frontmost-app observer (which ignores VOXCTL itself so tabbing into the app
+/// doesn't change the mode) and by explicit pin/unpin/edits.
+#[derive(Default)]
+pub struct ActiveModeState(pub Mutex<Option<(String, String)>>);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,8 +48,21 @@ pub struct Mode {
     pub keywords: Vec<String>,
     pub trigger_apps: Vec<String>,
     pub trigger_websites: Vec<String>,
+    /// Transcription model id (must exist in the registry).
     pub model: String,
+    /// User-enabled subset of the model's declared capabilities, applied at
+    /// transcription time.
+    #[serde(default)]
+    pub capabilities: Capabilities,
     pub builtin: bool,
+}
+
+/// The active mode plus *why* it's active ("pinned" | "auto" | "default").
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveMode {
+    pub mode: Mode,
+    pub reason: String,
 }
 
 fn preset(id: &str, name: &str, language: &str, apps: &[&str], sites: &[&str]) -> Mode {
@@ -46,21 +74,36 @@ fn preset(id: &str, name: &str, language: &str, apps: &[&str], sites: &[&str]) -
         keywords: Vec::new(),
         trigger_apps: apps.iter().map(|s| s.to_string()).collect(),
         trigger_websites: sites.iter().map(|s| s.to_string()).collect(),
-        model: MODEL.into(),
+        model: DEFAULT_MODEL.into(),
+        capabilities: Capabilities::default(),
         builtin: true,
     }
 }
 
-fn normalize_mode(mut mode: Mode) -> Mode {
-    mode.model = MODEL.into();
-    mode
+fn onboarding_default_mode(model: String) -> Mode {
+    Mode {
+        id: ONBOARDING_DEFAULT_ID.into(),
+        name: "DEFAULT".into(),
+        enabled: true,
+        language: "auto".into(),
+        keywords: Vec::new(),
+        trigger_apps: Vec::new(),
+        trigger_websites: Vec::new(),
+        model,
+        capabilities: Capabilities::default(),
+        builtin: true,
+    }
 }
 
-fn normalize_modes(modes: Vec<Mode>) -> Vec<Mode> {
-    modes.into_iter().map(normalize_mode).collect()
+fn default_model_for_provider(reg: &registry::Registry, provider: &str) -> Result<String, String> {
+    if reg.provider_by_id(provider).is_none() {
+        return Err(format!("unknown provider: {provider}"));
+    }
+    reg.default_model_for(provider)
+        .ok_or_else(|| format!("no default model for provider: {provider}"))
 }
 
-/// Built-in presets shipped with the app (brief §3).
+/// Built-in presets shipped with the app.
 pub fn default_modes() -> Vec<Mode> {
     vec![
         preset("claude", "CLAUDE", "auto", &["Claude"], &["claude.ai"]),
@@ -82,11 +125,78 @@ pub fn default_modes() -> Vec<Mode> {
     ]
 }
 
+/// All model ids the registry currently knows about.
+fn valid_model_ids(app: &AppHandle) -> Vec<String> {
+    registry::effective(app)
+        .models
+        .into_iter()
+        .map(|m| m.id)
+        .collect()
+}
+
+/// Map a renamed/retired model id to its replacement (e.g. the old combined
+/// `grok-stt` split into file/live variants).
+fn alias_model(id: &str) -> Option<&'static str> {
+    match id {
+        "grok-stt" => Some("grok-stt-file"),
+        _ => None,
+    }
+}
+
+/// Repair a mode whose model id the registry no longer knows: apply a rename
+/// alias if there is one, else fall back to the global default (or the first
+/// registry model). Known models are left untouched — the registry, not this
+/// function, decides what's selectable.
+fn normalize_mode(mut mode: Mode, valid_ids: &[String]) -> Mode {
+    if valid_ids.iter().any(|id| id == &mode.model) {
+        return mode;
+    }
+    if let Some(aliased) = alias_model(&mode.model) {
+        if valid_ids.iter().any(|id| id == aliased) {
+            mode.model = aliased.to_string();
+            return mode;
+        }
+    }
+    mode.model = if valid_ids.iter().any(|id| id == DEFAULT_MODEL) {
+        DEFAULT_MODEL.to_string()
+    } else {
+        valid_ids
+            .first()
+            .cloned()
+            .unwrap_or_else(|| DEFAULT_MODEL.to_string())
+    };
+    mode
+}
+
+fn read_store_string(app: &AppHandle, key: &str) -> Option<String> {
+    let store = app.store(STORE_FILE).ok()?;
+    store
+        .get(key)
+        .and_then(|v| v.as_str().map(str::to_string))
+        .filter(|s| !s.is_empty())
+}
+
+fn write_store_string(app: &AppHandle, key: &str, val: Option<&str>) {
+    if let Ok(store) = app.store(STORE_FILE) {
+        match val {
+            Some(s) => store.set(key, serde_json::json!(s)),
+            None => {
+                store.delete(key);
+            }
+        }
+        let _ = store.save();
+    }
+}
+
 fn load(app: &AppHandle) -> Vec<Mode> {
+    let valid = valid_model_ids(app);
     if let Ok(store) = app.store(STORE_FILE) {
         if let Some(v) = store.get(KEY) {
             if let Ok(modes) = serde_json::from_value::<Vec<Mode>>(v) {
-                let modes = normalize_modes(modes);
+                let modes: Vec<Mode> = modes
+                    .into_iter()
+                    .map(|m| normalize_mode(m, &valid))
+                    .collect();
                 if let Ok(v) = serde_json::to_value(&modes) {
                     store.set(KEY, v);
                     let _ = store.save();
@@ -114,8 +224,8 @@ fn persist(app: &AppHandle, modes: &[Mode]) {
     }
 }
 
-/// Public accessor for other modules (e.g. the record pipeline) to read modes.
-#[allow(dead_code)] // used by the active-mode resolver in slice 6
+/// Public accessor for other modules (e.g. the record pipeline).
+#[allow(dead_code)]
 pub fn all_modes(app: &AppHandle) -> Vec<Mode> {
     load(app)
 }
@@ -127,7 +237,8 @@ pub fn list_modes(app: AppHandle) -> Vec<Mode> {
 
 #[tauri::command]
 pub fn save_mode(app: AppHandle, mode: Mode) {
-    let mode = normalize_mode(mode);
+    let valid = valid_model_ids(&app);
+    let mode = normalize_mode(mode, &valid);
     let mut modes = load(&app);
     if let Some(existing) = modes.iter_mut().find(|m| m.id == mode.id) {
         *existing = mode;
@@ -135,13 +246,23 @@ pub fn save_mode(app: AppHandle, mode: Mode) {
         modes.push(mode);
     }
     persist(&app, &modes);
+    recompute_and_emit(&app);
 }
 
 #[tauri::command]
 pub fn delete_mode(app: AppHandle, id: String) {
+    // The default mode is non-deletable.
+    if read_store_string(&app, DEFAULT_KEY).as_deref() == Some(id.as_str()) {
+        return;
+    }
     let mut modes = load(&app);
     modes.retain(|m| m.id != id);
     persist(&app, &modes);
+    // A deleted mode can't stay pinned.
+    if read_store_string(&app, PINNED_KEY).as_deref() == Some(id.as_str()) {
+        write_store_string(&app, PINNED_KEY, None);
+    }
+    recompute_and_emit(&app);
 }
 
 #[tauri::command]
@@ -151,10 +272,53 @@ pub fn set_mode_enabled(app: AppHandle, id: String, enabled: bool) {
         m.enabled = enabled;
     }
     persist(&app, &modes);
+    recompute_and_emit(&app);
 }
 
-/// Find the first enabled mode triggered by the given app/website. Website
-/// match (best-effort) takes priority, then app match (reliable). Matching is
+/// Manually pin a mode. Sticky across app switches until unpinned.
+#[tauri::command]
+pub fn pin_mode(app: AppHandle, id: String) {
+    write_store_string(&app, PINNED_KEY, Some(&id));
+    recompute_and_emit(&app);
+}
+
+#[tauri::command]
+pub fn unpin_mode(app: AppHandle) {
+    write_store_string(&app, PINNED_KEY, None);
+    recompute_and_emit(&app);
+}
+
+/// Designate the priority-3 fallback (non-deletable) mode. Set by onboarding
+/// from the first validated key; can be moved to another mode later.
+#[tauri::command]
+pub fn set_default_mode(app: AppHandle, id: String) {
+    write_store_string(&app, DEFAULT_KEY, Some(&id));
+    recompute_and_emit(&app);
+}
+
+/// Onboarding bootstrap: once the first provider key validates, create/update
+/// the built-in Default Mode from that provider's registry default and make it
+/// the priority-3 fallback. Idempotent: repeated calls update the same mode.
+#[tauri::command]
+pub fn bootstrap_default_mode(app: AppHandle, provider: String) -> Result<Mode, String> {
+    let reg = registry::effective(&app);
+    let model = default_model_for_provider(&reg, &provider)?;
+
+    let mut modes = load(&app);
+    let default_mode = onboarding_default_mode(model);
+    if let Some(existing) = modes.iter_mut().find(|m| m.id == ONBOARDING_DEFAULT_ID) {
+        *existing = default_mode.clone();
+    } else {
+        modes.push(default_mode.clone());
+    }
+    persist(&app, &modes);
+    write_store_string(&app, DEFAULT_KEY, Some(ONBOARDING_DEFAULT_ID));
+    recompute_and_emit(&app);
+    Ok(default_mode)
+}
+
+/// Find the first enabled mode triggered by the given app/website. Website match
+/// (best-effort) takes priority, then app match (reliable). Matching is
 /// case-insensitive and substring-tolerant so "Claude" matches "Claude.app".
 pub fn match_mode(modes: &[Mode], app_name: Option<&str>, host: Option<&str>) -> Option<Mode> {
     let app_l = app_name.map(str::to_lowercase);
@@ -187,87 +351,217 @@ pub fn match_mode(modes: &[Mode], app_name: Option<&str>, host: Option<&str>) ->
     None
 }
 
-/// The currently active mode (tracked in the background; survives focusing
-/// VOXCTL itself). Returns None when nothing matches the frontmost app/website.
-#[tauri::command]
-pub fn get_active_mode(app: AppHandle) -> Option<Mode> {
-    let name = app.state::<ActiveModeState>().0.lock().unwrap().clone()?;
-    load(&app).into_iter().find(|m| m.name == name)
+/// Pure active-mode resolution: pin > auto > default, with a final fallback to
+/// the first mode so there is always an active mode once any exist. Returns the
+/// mode and the reason it won.
+pub fn resolve_active_mode(
+    modes: &[Mode],
+    pinned_id: Option<&str>,
+    default_id: Option<&str>,
+    app_name: Option<&str>,
+    host: Option<&str>,
+) -> Option<(Mode, &'static str)> {
+    // 1. Manual pin (only if it still exists).
+    if let Some(pid) = pinned_id {
+        if let Some(m) = modes.iter().find(|m| m.id == pid) {
+            return Some((m.clone(), "pinned"));
+        }
+    }
+    // 2. Auto match against enabled modes.
+    if let Some(m) = match_mode(modes, app_name, host) {
+        return Some((m, "auto"));
+    }
+    // 3. Explicit default mode.
+    if let Some(did) = default_id {
+        if let Some(m) = modes.iter().find(|m| m.id == did) {
+            return Some((m.clone(), "default"));
+        }
+    }
+    // Fallback: the first mode (keeps an active mode before a default is set).
+    modes.first().map(|m| (m.clone(), "default"))
 }
 
-/// Recompute the active mode from the frontmost app/website. Called on every
-/// app switch (and after mode edits). Emits `mode-changed` and optionally
-/// notifies — only when the mode actually changes.
-pub fn refresh_active_mode(app: &AppHandle) {
-    let Some((app_name, bundle)) = macos::frontmost_app() else {
-        return;
-    };
-    // Keep the active mode while the user is interacting with VOXCTL itself.
-    if bundle.as_deref() == Some(SELF_BUNDLE) {
-        return;
+/// Frontmost app/website for auto-matching. None while pinned (irrelevant) or
+/// while VOXCTL itself is frontmost (keep the current mode).
+fn current_match_context(pinned: bool) -> (Option<String>, Option<String>) {
+    if pinned {
+        return (None, None);
     }
-    let host = macos::focused_url().as_deref().and_then(macos::host_of);
-    let matched = match_mode(&load(app), Some(app_name.as_str()), host.as_deref());
-    let new_name = matched.as_ref().map(|m| m.name.clone());
+    match macos::frontmost_app() {
+        Some((name, bundle)) if bundle.as_deref() != Some(SELF_BUNDLE) => {
+            let host = macos::focused_url().as_deref().and_then(macos::host_of);
+            (Some(name), host)
+        }
+        _ => (None, None),
+    }
+}
+
+/// The currently active mode (cached; survives focusing VOXCTL itself).
+#[tauri::command]
+pub fn get_active_mode(app: AppHandle) -> Option<ActiveMode> {
+    let modes = load(&app);
+    if let Some((id, reason)) = app.state::<ActiveModeState>().0.lock().unwrap().clone() {
+        if let Some(m) = modes.iter().find(|m| m.id == id) {
+            return Some(ActiveMode {
+                mode: m.clone(),
+                reason,
+            });
+        }
+    }
+    // No cache yet (fresh launch) → resolve from pin/default only.
+    let pinned = read_store_string(&app, PINNED_KEY);
+    let default = read_store_string(&app, DEFAULT_KEY);
+    resolve_active_mode(&modes, pinned.as_deref(), default.as_deref(), None, None).map(
+        |(mode, reason)| ActiveMode {
+            mode,
+            reason: reason.to_string(),
+        },
+    )
+}
+
+/// Recompute the active mode and emit `mode-changed` only when it actually
+/// changes. Used by the app-switch observer and by pin/unpin/edit commands.
+pub fn recompute_and_emit(app: &AppHandle) {
+    let modes = load(app);
+    let pinned = read_store_string(app, PINNED_KEY);
+    let default = read_store_string(app, DEFAULT_KEY);
+    let (app_name, host) = current_match_context(pinned.is_some());
+    let resolved = resolve_active_mode(
+        &modes,
+        pinned.as_deref(),
+        default.as_deref(),
+        app_name.as_deref(),
+        host.as_deref(),
+    );
+    let new = resolved
+        .as_ref()
+        .map(|(m, r)| (m.id.clone(), (*r).to_string()));
 
     {
         let state = app.state::<ActiveModeState>();
         let mut cur = state.0.lock().unwrap();
-        if *cur == new_name {
+        if *cur == new {
             return;
         }
-        *cur = new_name.clone();
+        *cur = new;
     }
 
+    let (id, name) = match &resolved {
+        Some((m, _)) => (m.id.clone(), m.name.clone()),
+        None => (String::new(), "—".to_string()),
+    };
     let _ = app.emit(
         events::MODE_CHANGED,
         events::ModeChanged {
-            id: matched.as_ref().map(|m| m.id.clone()).unwrap_or_default(),
-            name: new_name.clone().unwrap_or_else(|| "—".into()),
+            id,
+            name: name.clone(),
         },
     );
 
-    if let Some(name) = new_name {
-        if load_config(app).notify_on_mode_switch {
-            use tauri_plugin_notification::{NotificationExt, PermissionState};
-            // Only show if the user actually granted notification permission
-            // (enabling the toggle prompts for it); otherwise this is a silent no-op.
-            if matches!(
-                app.notification().permission_state(),
-                Ok(PermissionState::Granted)
-            ) {
-                let _ = app
-                    .notification()
-                    .builder()
-                    .title("VOXCTL")
-                    .body(format!("Switched to {name} mode"))
-                    .show();
-            }
+    if name != "—" && load_config(app).notify_on_mode_switch {
+        use tauri_plugin_notification::{NotificationExt, PermissionState};
+        if matches!(
+            app.notification().permission_state(),
+            Ok(PermissionState::Granted)
+        ) {
+            let _ = app
+                .notification()
+                .builder()
+                .title("VOXCTL")
+                .body(format!("Switched to {name} mode"))
+                .show();
         }
     }
 }
 
-/// Build the recording context (language + which app/website/mode it belongs
-/// to) from the frontmost app and best-effort focused URL. Language precedence:
-/// HUD override → matched mode language → config default → auto.
+/// Recompute the active mode from the frontmost app/website. Called on every app
+/// switch. Skips recompute while VOXCTL is frontmost (keep the current mode),
+/// unless a mode is pinned (sticky regardless of the frontmost app).
+pub fn refresh_active_mode(app: &AppHandle) {
+    if read_store_string(app, PINNED_KEY).is_none() {
+        if let Some((_, bundle)) = macos::frontmost_app() {
+            if bundle.as_deref() == Some(SELF_BUNDLE) {
+                return;
+            }
+        }
+    }
+    recompute_and_emit(app);
+}
+
+/// Build the recording context (language + model + capability options + which
+/// app/website/mode it belongs to) from the resolved active mode. Language
+/// precedence: HUD override → active mode language → config default → auto.
 pub fn resolve_context(app: &AppHandle, override_lang: Option<String>) -> RecordingContext {
+    let modes = load(app);
+    let pinned = read_store_string(app, PINNED_KEY);
+    let default = read_store_string(app, DEFAULT_KEY);
+    // At record time VOXCTL is not frontmost (hotkey pressed from the target
+    // app), so the frontmost app is the real auto-match target.
     let app_name = macos::frontmost_app().map(|(n, _)| n);
     let host = macos::focused_url().as_deref().and_then(macos::host_of);
-    let matched = match_mode(&load(app), app_name.as_deref(), host.as_deref());
+    let resolved = resolve_active_mode(
+        &modes,
+        pinned.as_deref(),
+        default.as_deref(),
+        app_name.as_deref(),
+        host.as_deref(),
+    );
+    let matched = resolved.as_ref().map(|(m, _)| m);
 
     let language = override_lang
         .or_else(|| {
-            matched.as_ref().and_then(|m| {
+            matched.and_then(|m| {
                 (m.language != "auto" && !m.language.is_empty()).then(|| m.language.clone())
             })
         })
         .or_else(|| load_config(app).default_language);
 
+    let reg = registry::effective(app);
+    let model_id = matched.map(|m| m.model.clone()).unwrap_or_else(|| {
+        reg.providers
+            .first()
+            .map(|p| p.default_model_id.clone())
+            .unwrap_or_default()
+    });
+    let model = reg.model_by_id(&model_id);
+    let options = build_options(matched, model, language.clone());
+
     RecordingContext {
         language,
         app_name,
         website: host,
-        mode_name: matched.as_ref().map(|m| m.name.clone()),
+        mode_name: matched.map(|m| m.name.clone()),
+        model_id,
+        options,
+    }
+}
+
+/// Effective transcription options: the mode's language + keywords + capability
+/// toggles, intersected with what the chosen model actually supports (so we
+/// never send a language/keyword/capability a model would ignore or reject).
+pub fn build_options(
+    mode: Option<&Mode>,
+    model: Option<&crate::registry::ModelRecord>,
+    language: Option<String>,
+) -> crate::file_transcribe::TranscribeOptions {
+    let supports_lang = model.map(|m| m.supports_language).unwrap_or(false);
+    let supports_kw = model.map(|m| m.supports_keywords).unwrap_or(false);
+    let mc = model.map(|m| &m.capabilities);
+    let sel = mode.map(|m| &m.capabilities);
+    let both = |pick: fn(&Capabilities) -> bool| -> bool {
+        sel.map(pick).unwrap_or(false) && mc.map(pick).unwrap_or(false)
+    };
+    crate::file_transcribe::TranscribeOptions {
+        language: if supports_lang { language } else { None },
+        keywords: if supports_kw {
+            mode.map(|m| m.keywords.clone()).unwrap_or_default()
+        } else {
+            Vec::new()
+        },
+        diarization: both(|c| c.diarization),
+        word_timestamps: both(|c| c.word_timestamps),
+        inverse_text_normalization: both(|c| c.inverse_text_normalization),
+        multichannel: both(|c| c.multichannel),
     }
 }
 
@@ -284,9 +578,19 @@ mod tests {
             keywords: vec![],
             trigger_apps: apps.iter().map(|s| s.to_string()).collect(),
             trigger_websites: sites.iter().map(|s| s.to_string()).collect(),
-            model: MODEL.into(),
+            model: DEFAULT_MODEL.into(),
+            capabilities: Capabilities::default(),
             builtin: false,
         }
+    }
+
+    fn fixture() -> Vec<Mode> {
+        vec![
+            mode("default", &[], &[], true),
+            mode("code", &["Code"], &[], true),
+            mode("gpt", &[], &["chatgpt.com"], true),
+            mode("slackoff", &["Slack"], &[], false),
+        ]
     }
 
     #[test]
@@ -313,29 +617,117 @@ mod tests {
     }
 
     #[test]
-    fn disabled_modes_are_ignored() {
-        let modes = vec![mode("claude", &["Claude"], &[], false)];
-        assert!(match_mode(&modes, Some("Claude"), None).is_none());
-    }
-
-    #[test]
     fn website_takes_priority_over_app() {
         let modes = vec![
             mode("app_mode", &["Safari"], &[], true),
             mode("site_mode", &[], &["preply.com"], true),
         ];
-        // First in list wins on app; but a site match should still resolve to site_mode.
         let m = match_mode(&modes, Some("Safari"), Some("preply.com"));
         assert_eq!(m.unwrap().id, "site_mode");
     }
 
     #[test]
-    fn normalizes_stale_model_values() {
+    fn pin_beats_auto_and_default() {
+        let modes = fixture();
+        let (m, reason) =
+            resolve_active_mode(&modes, Some("gpt"), Some("default"), Some("Code"), None).unwrap();
+        assert_eq!(m.id, "gpt");
+        assert_eq!(reason, "pinned");
+    }
+
+    #[test]
+    fn auto_beats_default_when_unpinned() {
+        let modes = fixture();
+        let (m, reason) =
+            resolve_active_mode(&modes, None, Some("default"), Some("Code"), None).unwrap();
+        assert_eq!(m.id, "code");
+        assert_eq!(reason, "auto");
+    }
+
+    #[test]
+    fn falls_back_to_default_when_nothing_matches() {
+        let modes = fixture();
+        let (m, reason) =
+            resolve_active_mode(&modes, None, Some("default"), Some("Finder"), None).unwrap();
+        assert_eq!(m.id, "default");
+        assert_eq!(reason, "default");
+    }
+
+    #[test]
+    fn disabled_modes_never_auto_match() {
+        let modes = fixture();
+        // Slack triggers "slackoff" but it's disabled → falls to default.
+        let (m, reason) =
+            resolve_active_mode(&modes, None, Some("default"), Some("Slack"), None).unwrap();
+        assert_eq!(m.id, "default");
+        assert_eq!(reason, "default");
+    }
+
+    #[test]
+    fn pin_to_missing_mode_falls_through_to_auto() {
+        let modes = fixture();
+        let (m, reason) =
+            resolve_active_mode(&modes, Some("ghost"), Some("default"), Some("Code"), None)
+                .unwrap();
+        assert_eq!(m.id, "code");
+        assert_eq!(reason, "auto");
+    }
+
+    #[test]
+    fn normalizes_unknown_model_to_default() {
         let mut stale = mode("stale", &[], &[], true);
         stale.model = "whisper-large-v3".into();
+        let valid = vec!["gpt-realtime-whisper".to_string(), "whisper-1".to_string()];
+        assert_eq!(normalize_mode(stale, &valid).model, DEFAULT_MODEL);
+    }
 
-        let modes = normalize_modes(vec![stale]);
+    #[test]
+    fn keeps_known_model() {
+        let mut m = mode("m", &[], &[], true);
+        m.model = "whisper-1".into();
+        let valid = vec!["gpt-realtime-whisper".to_string(), "whisper-1".to_string()];
+        assert_eq!(normalize_mode(m, &valid).model, "whisper-1");
+    }
 
-        assert_eq!(modes[0].model, MODEL);
+    #[test]
+    fn renamed_model_maps_to_alias() {
+        let mut m = mode("m", &[], &[], true);
+        m.model = "grok-stt".into();
+        let valid = vec![
+            "gpt-realtime-whisper".to_string(),
+            "grok-stt-file".to_string(),
+        ];
+        assert_eq!(normalize_mode(m, &valid).model, "grok-stt-file");
+    }
+
+    #[test]
+    fn onboarding_default_mode_uses_fixed_builtin_shape() {
+        let m = onboarding_default_mode("grok-stt-live".into());
+        assert_eq!(m.id, ONBOARDING_DEFAULT_ID);
+        assert_eq!(m.name, "DEFAULT");
+        assert_eq!(m.language, "auto");
+        assert_eq!(m.model, "grok-stt-live");
+        assert!(m.enabled);
+        assert!(m.builtin);
+        assert!(m.trigger_apps.is_empty());
+        assert!(m.trigger_websites.is_empty());
+    }
+
+    #[test]
+    fn onboarding_provider_defaults_match_registry() {
+        let reg = registry::bundled();
+        assert_eq!(
+            default_model_for_provider(&reg, "openai").unwrap(),
+            "gpt-realtime-whisper"
+        );
+        assert_eq!(
+            default_model_for_provider(&reg, "xai").unwrap(),
+            "grok-stt-live"
+        );
+        assert_eq!(
+            default_model_for_provider(&reg, "gemini").unwrap(),
+            "gemini-2.5-flash"
+        );
+        assert!(default_model_for_provider(&reg, "anthropic").is_err());
     }
 }

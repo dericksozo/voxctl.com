@@ -18,8 +18,16 @@ dist-ssr
 .idea
 .DS_Store
 
-# Local-only build brief / scratch docs
+# Local-only build brief / planning / scratch docs
 BRIEF.md
+VOXCTL-ARCHITECTURE-IMPLEMENTATION-PLAN.md
+VOXCTL-BACKEND-AND-UX-IMPROVEMENTS.md
+
+# Local-only API keys used for manual/live testing — NEVER commit
+API_KEYS_FOR_TESTING.md
+
+# Local-only running status doc for the architecture overhaul
+TASK_STATE.md
 *.suo
 *.ntvs*
 *.njsproj

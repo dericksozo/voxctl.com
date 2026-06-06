@@ -6,7 +6,6 @@ use serde::Serialize;
 
 pub const MIC_LEVEL: &str = "voxctl:mic-level";
 pub const REC_STATE: &str = "voxctl:rec-state";
-pub const TRANSCRIPT_PARTIAL: &str = "voxctl:transcript-partial";
 pub const TRANSCRIPT_FINAL: &str = "voxctl:transcript-final";
 pub const MODE_CHANGED: &str = "voxctl:mode-changed";
 pub const HISTORY_CHANGED: &str = "voxctl:history-changed";

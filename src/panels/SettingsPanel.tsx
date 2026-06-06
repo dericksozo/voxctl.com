@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { ProviderKeyCard } from "../components/ProviderKeyCard";
 import { Segmented, Toggle } from "../components/Primitives";
 import { ShortcutRecorder } from "../components/ShortcutRecorder";
 import { useConfig } from "../hooks/useConfig";
@@ -6,67 +8,52 @@ import { t } from "../i18n";
 import { AVAILABLE_LOCALES } from "../i18n";
 import { LANGUAGES } from "../lib/languages";
 import {
-  setApiKey,
-  deleteApiKey,
   openPermissionSettings,
+  purgeRecordings,
   requestAccessibility,
   requestMicrophone,
   requestNotificationPermission,
+  storageStats,
 } from "../lib/ipc";
-import type { CaptureMode, PermissionStatus } from "../lib/types";
+import type { CaptureMode, DeleteBehavior, PermissionStatus, StorageStats } from "../lib/types";
+import {
+  providerValidated,
+  type ProviderStatus,
+  type Registry,
+} from "../lib/registry";
+
+/** Settings sections, in scroll order. Drives the scroll-spy that updates the
+ *  content-frame header (`// SETTINGS / …`) and the SYS.DESC blurb. */
+const SECTIONS: { id: string; label: string; desc: string }[] = [
+  { id: "providers", label: "settings.sec.providers", desc: "settings.sec.providersDesc" },
+  { id: "capture", label: "settings.sec.capture", desc: "settings.sec.captureDesc" },
+  { id: "transcription", label: "settings.sec.transcription", desc: "settings.sec.transcriptionDesc" },
+  { id: "audio", label: "settings.sec.audio", desc: "settings.sec.audioDesc" },
+  { id: "storage", label: "settings.sec.storage", desc: "settings.sec.storageDesc" },
+  { id: "system", label: "settings.sec.system", desc: "settings.sec.systemDesc" },
+  { id: "about", label: "settings.sec.about", desc: "settings.sec.aboutDesc" },
+];
 
 export function SettingsPanel({
-  apiKeySet,
-  refreshApiKey,
+  registry,
+  providers,
+  refreshProviders,
   perms,
   refreshPerms,
   recording,
+  onSection,
 }: {
-  apiKeySet: boolean;
-  refreshApiKey: () => void;
+  registry: Registry | null;
+  providers: ProviderStatus;
+  refreshProviders: () => void;
   perms: PermissionStatus;
   refreshPerms: () => void;
   recording: boolean;
+  onSection: (s: { label: string; desc: string } | null) => void;
 }) {
   const { config, set } = useConfig();
-  const [keyDraft, setKeyDraft] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [keyErr, setKeyErr] = useState<string | null>(null);
-
-  // Reflect stored state without ever pulling the secret into the webview.
-  useEffect(() => {
-    if (apiKeySet) setKeyDraft("");
-  }, [apiKeySet]);
-
-  async function saveKey() {
-    if (recording) return;
-    const k = keyDraft.trim();
-    setSaving(true);
-    setKeyErr(null);
-    try {
-      if (k) {
-        // Validated against OpenAI in Rust; an invalid key is rejected (not stored).
-        await setApiKey(k);
-      } else {
-        await deleteApiKey();
-      }
-      setKeyDraft("");
-      refreshApiKey();
-    } catch (e) {
-      const msg = String(e);
-      setKeyErr(
-        msg.includes("invalid")
-          ? t("settings.keyInvalid")
-          : msg.includes("unreachable")
-            ? t("settings.keyUnreachable")
-            : t("settings.keyError"),
-      );
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const permsMissing = !perms.microphone || !perms.accessibility;
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const lastSec = useRef("");
 
   // Notifications are OFF by default. Turning them ON triggers the macOS
   // permission prompt; only persist ON if the user actually grants it.
@@ -80,10 +67,164 @@ export function SettingsPanel({
     set("notifyOnModeSwitch", granted);
   }
 
+  // Scroll-spy: report the section nearest the top of the scroll container so the
+  // header (`// SETTINGS / …`) and SYS.DESC track what you're looking at.
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const report = () => {
+      const line = el.getBoundingClientRect().top + 90;
+      let active = SECTIONS[0];
+      for (const s of SECTIONS) {
+        const node = el.querySelector<HTMLElement>(`[data-sec="${s.id}"]`);
+        if (node && node.getBoundingClientRect().top <= line) active = s;
+      }
+      if (active.id !== lastSec.current) {
+        lastSec.current = active.id;
+        onSection({ label: t(active.label), desc: t(active.desc) });
+      }
+    };
+    report();
+    el.addEventListener("scroll", report, { passive: true });
+    return () => el.removeEventListener("scroll", report);
+  }, [onSection]);
+
   return (
-    <div className="panel-body settings">
+    <div className="panel-body settings" ref={bodyRef}>
       {recording ? <div className="set-hint">RECORDING IN PROGRESS</div> : null}
-      {permsMissing ? (
+
+      <section className="set-section" data-sec="providers">
+        <div className="set-section-head">{t("settings.sec.providers")}</div>
+        <div className="set-row">
+          <div className="set-label">
+            {t("settings.providers")} <span className="set-sub">{t("settings.byok")}</span>
+          </div>
+          <div className="prov-list">
+            {(registry?.providers ?? []).map((p) => (
+              <ProviderKeyCard
+                key={p.id}
+                provider={p}
+                registry={registry}
+                validated={providerValidated(providers, p.id)}
+                recording={recording}
+                onChanged={refreshProviders}
+              />
+            ))}
+          </div>
+          <div className="set-hint">{t("settings.keyHint")}</div>
+        </div>
+      </section>
+
+      <section className="set-section" data-sec="capture">
+        <div className="set-section-head">{t("settings.sec.capture")}</div>
+        <div className="set-row">
+          <div className="set-label">{t("settings.capture")}</div>
+          <Segmented<CaptureMode>
+            value={config.captureMode}
+            options={[
+              { value: "toggle", label: t("settings.toggle") },
+              { value: "ptt", label: t("settings.ptt") },
+            ]}
+            onChange={(v) => set("captureMode", v, { reloadShortcut: true })}
+            disabled={recording}
+          />
+          <div className="set-hint">
+            {config.captureMode === "toggle" ? t("settings.captureHint.toggle") : t("settings.captureHint.ptt")}
+          </div>
+        </div>
+        <div className="set-row">
+          <div className="set-label">{t("settings.shortcut")}</div>
+          <ShortcutRecorder
+            value={config.shortcut}
+            onChange={(s) => set("shortcut", s, { reloadShortcut: true })}
+            disabled={recording}
+          />
+        </div>
+      </section>
+
+      <section className="set-section" data-sec="transcription">
+        <div className="set-section-head">{t("settings.sec.transcription")}</div>
+        <div className="set-row">
+          <div className="set-label">{t("settings.transcriptionLanguage")}</div>
+          <select
+            className="set-select"
+            value={config.defaultLanguage ?? "auto"}
+            onChange={(e) => set("defaultLanguage", e.target.value === "auto" ? null : e.target.value)}
+            disabled={recording}
+          >
+            {LANGUAGES.map((l) => (
+              <option key={l.code} value={l.code}>
+                {l.code === "auto" ? t("settings.autoDetect") : l.label}
+              </option>
+            ))}
+          </select>
+          <div className="set-hint">{t("settings.alwaysSave")}</div>
+        </div>
+      </section>
+
+      <section className="set-section" data-sec="audio">
+        <div className="set-section-head">{t("settings.sec.audio")}</div>
+        <div className="set-row inline">
+          <div className="set-label">
+            {t("settings.sfx")} <span className="set-sub">{t("settings.sfxSub")}</span>
+          </div>
+          <Toggle
+            on={config.sfxEnabled}
+            onToggle={() => set("sfxEnabled", !config.sfxEnabled)}
+            labels={[t("settings.sfxOn"), t("settings.sfxOff")]}
+            disabled={recording}
+          />
+        </div>
+        <div className="set-row inline">
+          <div className="set-label">
+            {t("settings.notify")} <span className="set-sub">{t("settings.notifySub")}</span>
+          </div>
+          <Toggle
+            on={config.notifyOnModeSwitch}
+            onToggle={toggleNotify}
+            labels={[t("settings.on"), t("settings.off")]}
+            disabled={recording}
+          />
+        </div>
+      </section>
+
+      <section className="set-section" data-sec="storage">
+        <div className="set-section-head">{t("settings.sec.storage")}</div>
+        <StorageSection
+          deleteBehavior={config.deleteBehavior}
+          onDeleteBehavior={(v) => set("deleteBehavior", v)}
+          recording={recording}
+        />
+      </section>
+
+      <section className="set-section" data-sec="system">
+        <div className="set-section-head">{t("settings.sec.system")}</div>
+        <div className="set-row inline">
+          <div className="set-label">
+            {t("settings.clipboard")} <span className="set-sub">{t("settings.clipboardSub")}</span>
+          </div>
+          <Toggle
+            on={config.copyToClipboard}
+            onToggle={() => set("copyToClipboard", !config.copyToClipboard)}
+            labels={[t("settings.on"), t("settings.off")]}
+            disabled={recording}
+          />
+        </div>
+        <div className="set-row">
+          <div className="set-label">{t("settings.appLanguage")}</div>
+          <select
+            className="set-select"
+            value={config.appLocale}
+            onChange={(e) => set("appLocale", e.target.value)}
+            disabled={recording}
+          >
+            {AVAILABLE_LOCALES.map((l) => (
+              <option key={l.code} value={l.code}>
+                {l.label}
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="set-row">
           <div className="set-label">
             {t("perm.title")} <span className="set-sub">{t("perm.banner")}</span>
@@ -112,130 +253,107 @@ export function SettingsPanel({
             </button>
           </div>
         </div>
-      ) : null}
+      </section>
 
-      <div className="set-row">
-        <div className="set-label">
-          {t("settings.apiKey")} <span className="set-sub">{t("settings.byok")}</span>
-        </div>
-        <div className="set-key">
-          <input
-            className="key-input"
-            value={keyDraft}
-            disabled={recording}
-            onChange={(e) => {
-              setKeyDraft(e.target.value);
-              if (keyErr) setKeyErr(null);
-            }}
-            type="password"
-            spellCheck={false}
-            placeholder={apiKeySet ? "•••••••••••••••• (stored)" : "sk-…"}
-          />
-          <button type="button" className="key-eye" onClick={saveKey} disabled={saving || recording}>
-            {saving ? t("settings.validating") : t("settings.save")}
+      <section className="set-section" data-sec="about">
+        <div className="set-section-head">{t("settings.sec.about")}</div>
+        <div className="set-row">
+          <div className="set-label">{t("settings.aboutLine")}</div>
+          <button
+            type="button"
+            className="prov-docs"
+            style={{ marginLeft: 0 }}
+            onClick={() => openUrl("https://docs.voxctl.com").catch(() => {})}
+          >
+            {t("settings.docs")} ↗
           </button>
-          <span className={"set-ok" + (keyErr ? " bad" : apiKeySet ? "" : " bad")}>
-            {keyErr ? "✕ " + keyErr : apiKeySet ? "✓ " + t("settings.valid") : t("settings.invalid")}
-          </span>
         </div>
-        <div className="set-hint">{t("settings.keyHint")}</div>
+      </section>
+    </div>
+  );
+}
+
+const fmtMB = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+
+/** Storage: disk used, delete-behavior, and a retention purge (Storage section). */
+function StorageSection({
+  deleteBehavior,
+  onDeleteBehavior,
+  recording,
+}: {
+  deleteBehavior: DeleteBehavior;
+  onDeleteBehavior: (v: DeleteBehavior) => void;
+  recording: boolean;
+}) {
+  const [stats, setStats] = useState<StorageStats | null>(null);
+  const [days, setDays] = useState(30);
+  const [keepFav, setKeepFav] = useState(true);
+  const [purging, setPurging] = useState(false);
+
+  const refresh = () => storageStats().then(setStats).catch(() => {});
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  async function purge() {
+    if (recording) return;
+    setPurging(true);
+    try {
+      await purgeRecordings(days, keepFav);
+      refresh();
+    } catch (e) {
+      console.error("purge failed", e);
+    } finally {
+      setPurging(false);
+    }
+  }
+
+  return (
+    <div className="set-row">
+      <div className="set-label">
+        {t("settings.storage")}{" "}
+        <span className="set-sub">
+          {stats
+            ? t("settings.storageUsed", { size: fmtMB(stats.totalBytes), n: stats.recordingCount })
+            : ""}
+        </span>
       </div>
 
-      <div className="set-row">
-        <div className="set-label">{t("settings.capture")}</div>
-        <Segmented<CaptureMode>
-          value={config.captureMode}
+      <div className="set-row inline" style={{ marginTop: 4 }}>
+        <div className="set-label" style={{ marginBottom: 0 }}>
+          {t("settings.deleteBehavior")} <span className="set-sub">{t("settings.deleteBehaviorSub")}</span>
+        </div>
+        <Segmented<DeleteBehavior>
+          value={deleteBehavior}
           options={[
-            { value: "toggle", label: t("settings.toggle") },
-            { value: "ptt", label: t("settings.ptt") },
+            { value: "both", label: t("settings.deleteBoth") },
+            { value: "transcript", label: t("settings.deleteKeepAudio") },
           ]}
-          onChange={(v) => set("captureMode", v, { reloadShortcut: true })}
+          onChange={onDeleteBehavior}
           disabled={recording}
         />
-        <div className="set-hint">
-          {config.captureMode === "toggle" ? t("settings.captureHint.toggle") : t("settings.captureHint.ptt")}
-        </div>
       </div>
 
-      <div className="set-grid">
-        <div className="set-cell">
-          <div className="set-label">{t("settings.shortcut")}</div>
-          <ShortcutRecorder
-            value={config.shortcut}
-            onChange={(s) => set("shortcut", s, { reloadShortcut: true })}
-            disabled={recording}
-          />
-        </div>
-        <div className="set-cell">
-          <div className="set-label">{t("settings.transcriptionLanguage")}</div>
-          <select
-            className="set-select"
-            value={config.defaultLanguage ?? "auto"}
-            onChange={(e) => set("defaultLanguage", e.target.value === "auto" ? null : e.target.value)}
-            disabled={recording}
-          >
-            {LANGUAGES.map((l) => (
-              <option key={l.code} value={l.code}>
-                {l.code === "auto" ? t("settings.autoDetect") : l.label}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      <div className="set-grid">
-        <div className="set-cell">
-          <div className="set-label">{t("settings.appLanguage")}</div>
-          <select
-            className="set-select"
-            value={config.appLocale}
-            onChange={(e) => set("appLocale", e.target.value)}
-            disabled={recording}
-          >
-            {AVAILABLE_LOCALES.map((l) => (
-              <option key={l.code} value={l.code}>
-                {l.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="set-cell" />
-      </div>
-
-      <div className="set-row inline">
-        <div className="set-label">
-          {t("settings.sfx")} <span className="set-sub">{t("settings.sfxSub")}</span>
-        </div>
+      <div className="storage-purge">
+        <span className="set-sub">{t("settings.purgeOlder")}</span>
+        <input
+          className="storage-days"
+          type="number"
+          min={1}
+          value={days}
+          disabled={recording}
+          onChange={(e) => setDays(Math.max(1, Number(e.target.value) || 1))}
+        />
+        <span className="set-sub">{t("settings.purgeDays")}</span>
         <Toggle
-          on={config.sfxEnabled}
-          onToggle={() => set("sfxEnabled", !config.sfxEnabled)}
-          labels={[t("settings.sfxOn"), t("settings.sfxOff")]}
+          on={keepFav}
+          onToggle={() => setKeepFav((v) => !v)}
+          labels={[t("settings.purgeKeepFav"), t("settings.purgeAll")]}
           disabled={recording}
         />
-      </div>
-
-      <div className="set-row inline">
-        <div className="set-label">
-          {t("settings.clipboard")} <span className="set-sub">{t("settings.clipboardSub")}</span>
-        </div>
-        <Toggle
-          on={config.copyToClipboard}
-          onToggle={() => set("copyToClipboard", !config.copyToClipboard)}
-          labels={[t("settings.on"), t("settings.off")]}
-          disabled={recording}
-        />
-      </div>
-
-      <div className="set-row inline">
-        <div className="set-label">
-          {t("settings.notify")} <span className="set-sub">{t("settings.notifySub")}</span>
-        </div>
-        <Toggle
-          on={config.notifyOnModeSwitch}
-          onToggle={toggleNotify}
-          labels={[t("settings.on"), t("settings.off")]}
-          disabled={recording}
-        />
+        <button type="button" className="pc-btn danger-btn" onClick={purge} disabled={purging || recording}>
+          {purging ? t("settings.purging") : t("settings.purge")}
+        </button>
       </div>
     </div>
   );

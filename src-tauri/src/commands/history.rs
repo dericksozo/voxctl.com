@@ -3,21 +3,69 @@
 
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::commands::config;
 use crate::events;
-use crate::history::{self, HistoryDb, HistoryItem};
+use crate::history::{self, HistoryDb, HistoryItem, StorageStats};
 
 #[tauri::command]
 pub fn list_history(app: AppHandle) -> Vec<HistoryItem> {
     history::list(&app.state::<HistoryDb>())
 }
 
+/// Whether a `×` delete should also remove the WAV (delete-behavior setting).
+fn delete_removes_audio(app: &AppHandle) -> bool {
+    config::load_config(app).delete_behavior != "transcript"
+}
+
 #[tauri::command]
 pub fn delete_recording(app: AppHandle, id: i64) -> Result<(), String> {
+    let remove_audio = delete_removes_audio(&app);
     if let Some(path) = history::delete(&app.state::<HistoryDb>(), id) {
-        let _ = std::fs::remove_file(path);
+        if remove_audio {
+            let _ = std::fs::remove_file(path);
+        }
     }
     let _ = app.emit(events::HISTORY_CHANGED, ());
     Ok(())
+}
+
+/// Bulk delete (selection in the Files panel). Honors the delete-behavior setting.
+#[tauri::command]
+pub fn delete_recordings(app: AppHandle, ids: Vec<i64>) -> Result<(), String> {
+    let remove_audio = delete_removes_audio(&app);
+    let paths = history::delete_many(&app.state::<HistoryDb>(), &ids);
+    if remove_audio {
+        for p in paths {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+    let _ = app.emit(events::HISTORY_CHANGED, ());
+    Ok(())
+}
+
+/// Disk usage of the recordings directory + recording count (Storage section).
+#[tauri::command]
+pub fn storage_stats(app: AppHandle) -> StorageStats {
+    history::storage_stats(&app)
+}
+
+/// Delete recordings older than `older_than_days`, optionally keeping favorites.
+/// Always frees the audio files (this is the purpose of a purge). Returns the
+/// number of recordings removed.
+#[tauri::command]
+pub fn purge_recordings(
+    app: AppHandle,
+    older_than_days: u32,
+    keep_favorites: bool,
+) -> Result<usize, String> {
+    let paths =
+        history::purge_older_than(&app.state::<HistoryDb>(), older_than_days, keep_favorites);
+    let removed = paths.len();
+    for p in paths {
+        let _ = std::fs::remove_file(p);
+    }
+    let _ = app.emit(events::HISTORY_CHANGED, ());
+    Ok(removed)
 }
 
 #[tauri::command]

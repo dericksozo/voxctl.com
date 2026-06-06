@@ -4,8 +4,17 @@ import { t } from "../i18n";
 import { langLabel, LANGUAGES } from "../lib/languages";
 import { deleteMode, saveMode, setModeEnabled } from "../lib/ipc";
 import type { Mode } from "../lib/types";
-
-const MODEL = "gpt-realtime-whisper";
+import {
+  type Capabilities,
+  costLabel,
+  modelBadge,
+  modelById,
+  type ModelRecord,
+  modelsForProvider,
+  providerValidated,
+  type ProviderStatus,
+  type Registry,
+} from "../lib/registry";
 
 const csv = (xs: string[]) => xs.join(", ");
 const parseCsv = (s: string) =>
@@ -14,7 +23,25 @@ const parseCsv = (s: string) =>
     .map((x) => x.trim())
     .filter(Boolean);
 
-function emptyMode(): Mode {
+/** Capability toggles the editor reveals only when the chosen model declares them. */
+const CAP_FIELDS: { key: keyof Capabilities; label: string }[] = [
+  { key: "wordTimestamps", label: "WORD TIMESTAMPS" },
+  { key: "diarization", label: "SPEAKER DIARIZATION" },
+  { key: "inverseTextNormalization", label: "INVERSE TEXT NORMALIZATION" },
+  { key: "multichannel", label: "MULTICHANNEL" },
+];
+
+/** Default model for a brand-new mode: the first validated provider's default,
+ *  else the first registry model, else the live whisper fallback. */
+function defaultModelId(registry: Registry | null, providers: ProviderStatus): string {
+  if (!registry) return "gpt-realtime-whisper";
+  for (const p of registry.providers) {
+    if (providerValidated(providers, p.id)) return p.defaultModelId;
+  }
+  return registry.models[0]?.id ?? "gpt-realtime-whisper";
+}
+
+function emptyMode(model: string): Mode {
   return {
     id: "m" + Date.now(),
     name: "",
@@ -23,7 +50,8 @@ function emptyMode(): Mode {
     keywords: [],
     triggerApps: [],
     triggerWebsites: [],
-    model: MODEL,
+    model,
+    capabilities: {},
     builtin: false,
   };
 }
@@ -31,11 +59,17 @@ function emptyMode(): Mode {
 export function ModesPanel({
   modes,
   activeModeId,
+  registry,
+  providers,
   onChange,
+  go,
 }: {
   modes: Mode[];
   activeModeId: string | null;
+  registry: Registry | null;
+  providers: ProviderStatus;
   onChange: () => void;
+  go: (panel: string) => void;
 }) {
   const [editing, setEditing] = useState<Mode | null>(null);
 
@@ -66,17 +100,35 @@ export function ModesPanel({
   }
 
   if (editing) {
-    return <ModeForm initial={editing} onCancel={() => setEditing(null)} onSave={save} />;
+    return (
+      <ModeForm
+        initial={editing}
+        registry={registry}
+        providers={providers}
+        go={go}
+        onCancel={() => setEditing(null)}
+        onSave={save}
+      />
+    );
   }
 
   return (
     <div className="panel-body modes">
-      <button type="button" className="add-mode top" onClick={() => setEditing(emptyMode())}>
+      <button
+        type="button"
+        className="add-mode top"
+        onClick={() => setEditing(emptyMode(defaultModelId(registry, providers)))}
+      >
         ＋ {t("modes.add")}
       </button>
       {modes.map((m) => {
         const triggers = [...m.triggerApps, ...m.triggerWebsites];
         const active = m.id === activeModeId;
+        const model = modelById(registry, m.model);
+        const providerLabel =
+          model && registry
+            ? (registry.providers.find((p) => p.id === model.provider)?.label ?? model.provider)
+            : null;
         return (
           <div key={m.id} className={"mode-card" + (active ? " active" : "") + (m.enabled ? "" : " off")}>
             <div className="mode-top">
@@ -102,6 +154,12 @@ export function ModesPanel({
             </div>
             <div className="mode-rules">
               <span className="mr">
+                <span className="mr-k">{t("modes.model")}</span>
+                {providerLabel ? `${providerLabel} · ` : ""}
+                {model?.label ?? m.model.toUpperCase()}
+                {model ? <span className="mode-badge mp-badge">{modelBadge(model)}</span> : null}
+              </span>
+              <span className="mr">
                 <span className="mr-k">{t("modes.trigger")}</span>
                 {triggers.length ? triggers.join(" · ") : "—"}
               </span>
@@ -125,16 +183,37 @@ export function ModesPanel({
 
 function ModeForm({
   initial,
+  registry,
+  providers,
+  go,
   onCancel,
   onSave,
 }: {
   initial: Mode;
+  registry: Registry | null;
+  providers: ProviderStatus;
+  go: (panel: string) => void;
   onCancel: () => void;
   onSave: (m: Mode) => void;
 }) {
   const [m, setM] = useState<Mode>(initial);
   const set = <K extends keyof Mode>(k: K, v: Mode[K]) => setM((s) => ({ ...s, [k]: v }));
   const isNew = !initial.name;
+
+  const selModel = modelById(registry, m.model);
+  const caps = selModel ? CAP_FIELDS.filter((c) => selModel.capabilities[c.key]) : [];
+
+  // Selecting a model resets fields the new model doesn't support, so we never
+  // persist (or send) a language/keywords a model ignores.
+  function selectModel(id: string) {
+    const mod = modelById(registry, id);
+    setM((s) => ({
+      ...s,
+      model: id,
+      language: mod?.supportsLanguage ? s.language : "auto",
+      keywords: mod?.supportsKeywords ? s.keywords : [],
+    }));
+  }
 
   return (
     <div className="panel-body modes-new">
@@ -153,6 +232,40 @@ function ModeForm({
           onChange={(e) => set("name", e.target.value.toUpperCase())}
         />
       </div>
+
+      <div className="nm-field">
+        <label>{t("modes.field.model")}</label>
+        <ModelPicker
+          registry={registry}
+          providers={providers}
+          selected={m.model}
+          onSelect={selectModel}
+          go={go}
+        />
+      </div>
+
+      {selModel ? <ModelInfo model={selModel} /> : null}
+
+      {caps.length > 0 ? (
+        <div className="nm-field">
+          <label>{t("modes.field.capabilities")}</label>
+          <div className="cap-toggles">
+            {caps.map((c) => (
+              <div key={c.key} className="cap-row">
+                <span className="cap-label">{c.label}</span>
+                <Toggle
+                  on={!!m.capabilities[c.key]}
+                  onToggle={() =>
+                    set("capabilities", { ...m.capabilities, [c.key]: !m.capabilities[c.key] })
+                  }
+                  labels={[t("settings.on"), t("settings.off")]}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       <div className="nm-grid">
         <div className="nm-field">
           <label>
@@ -177,7 +290,8 @@ function ModeForm({
           />
         </div>
       </div>
-      <div className="nm-grid">
+      {/* Language and keywords only show for models that honor them. */}
+      {selModel?.supportsLanguage ? (
         <div className="nm-field">
           <label>{t("modes.field.language")}</label>
           <select className="set-select" value={m.language} onChange={(e) => set("language", e.target.value)}>
@@ -188,21 +302,119 @@ function ModeForm({
             ))}
           </select>
         </div>
+      ) : null}
+      {selModel?.supportsKeywords ? (
         <div className="nm-field">
           <label>
             {t("modes.field.keywords")} <span>{t("modes.field.keywordsHint")}</span>
           </label>
           <input
+            key={m.model}
             className="key-input"
             defaultValue={csv(m.keywords)}
             placeholder="VOXCTL, Tauri, cpal"
             onChange={(e) => set("keywords", parseCsv(e.target.value))}
           />
         </div>
-      </div>
+      ) : null}
       <button type="button" className="nm-save" onClick={() => onSave(m)}>
         ✓ {t("modes.save")}
       </button>
+    </div>
+  );
+}
+
+/** Expanded detail for the currently selected model: what it is, when to use
+ *  it, accuracy/speed, and price. The teaching surface for the one place a user
+ *  picks a model. */
+function ModelInfo({ model }: { model: ModelRecord }) {
+  return (
+    <div className="model-info">
+      <div className="mi-head">
+        <span className="mi-name">{model.label}</span>
+        <span className="mp-badge">{modelBadge(model)}</span>
+        <span className="mi-cost">{costLabel(model)}</span>
+      </div>
+      {model.description ? <div className="mi-desc">{model.description}</div> : null}
+      <div className="mi-stats">
+        {model.accuracy ? (
+          <span>
+            <span className="mi-k">{t("modes.accuracy")}</span> {model.accuracy}
+          </span>
+        ) : null}
+        {model.speed ? (
+          <span>
+            <span className="mi-k">{t("modes.speed")}</span> {model.speed}
+          </span>
+        ) : null}
+      </div>
+      {model.useCase ? <div className="mi-use">↳ {model.useCase}</div> : null}
+    </div>
+  );
+}
+
+/** Provider-gated model picker. Models whose provider lacks a validated key are
+ *  disabled with an inline "add key" link. Each row shows a LIVE/FILE badge. */
+function ModelPicker({
+  registry,
+  providers,
+  selected,
+  onSelect,
+  go,
+}: {
+  registry: Registry | null;
+  providers: ProviderStatus;
+  selected: string;
+  onSelect: (id: string) => void;
+  go: (panel: string) => void;
+}) {
+  if (!registry) return <div className="empty">// REGISTRY UNAVAILABLE</div>;
+
+  return (
+    <div className="model-picker">
+      {registry.providers.map((p) => {
+        const models = modelsForProvider(registry, p.id);
+        if (models.length === 0) return null;
+        const validated = providerValidated(providers, p.id);
+        return (
+          <div key={p.id} className={"mp-group" + (validated ? "" : " locked")}>
+            <div className="mp-group-head">
+              <span className="mp-prov">
+                <span className={"prov-dot " + (validated ? "on" : "off")} />
+                {p.label}
+              </span>
+              {validated ? null : (
+                <button type="button" className="mp-addkey" onClick={() => go("settings")}>
+                  {t("modes.addKey", { provider: p.label })} →
+                </button>
+              )}
+            </div>
+            {models.map((mod) => {
+              const isSel = mod.id === selected;
+              return (
+                <button
+                  key={mod.id}
+                  type="button"
+                  className={"mp-row" + (isSel ? " sel" : "")}
+                  disabled={!validated}
+                  onClick={() => onSelect(mod.id)}
+                >
+                  <span className="mp-radio">{isSel ? "●" : "○"}</span>
+                  <span className="mp-main">
+                    <span className="mp-name-row">
+                      <span className="mp-name">{mod.label}</span>
+                      <span className="mp-badge">{modelBadge(mod)}</span>
+                      <span className="mp-cost">{costLabel(mod)}</span>
+                    </span>
+                    {mod.description ? <span className="mp-desc">{mod.description}</span> : null}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        );
+      })}
+      <div className="mp-legend">{t("modes.badgeLegend")}</div>
     </div>
   );
 }

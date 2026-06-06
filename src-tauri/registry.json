@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "openai",
+      "label": "OPENAI",
+      "keychainAccount": "voxctl.openai",
+      "docsUrl": "https://docs.voxctl.com/api/openai",
+      "defaultModelId": "gpt-realtime-whisper"
+    },
+    {
+      "id": "xai",
+      "label": "XAI",
+      "keychainAccount": "voxctl.xai",
+      "docsUrl": "https://docs.voxctl.com/api/xai",
+      "defaultModelId": "grok-stt-live"
+    },
+    {
+      "id": "gemini",
+      "label": "GEMINI",
+      "keychainAccount": "voxctl.gemini",
+      "docsUrl": "https://docs.voxctl.com/api/gemini",
+      "defaultModelId": "gemini-2.5-flash"
+    }
+  ],
+  "models": [
+    {
+      "id": "gpt-realtime-whisper",
+      "provider": "openai",
+      "label": "GPT-REALTIME-WHISPER",
+      "canLive": true,
+      "canFile": false,
+      "costRate": 0.017,
+      "costUnit": "perMin",
+      "supportsLanguage": false,
+      "supportsKeywords": false,
+      "accuracy": "GOOD",
+      "speed": "REALTIME",
+      "description": "Streaming dictation — transcribes as you speak, lowest latency. Auto language only.",
+      "useCase": "Everyday live dictation where speed matters more than peak accuracy.",
+      "capabilities": {}
+    },
+    {
+      "id": "gpt-4o-transcribe",
+      "provider": "openai",
+      "label": "GPT-4O-TRANSCRIBE",
+      "canLive": false,
+      "canFile": true,
+      "costRate": 0.006,
+      "costUnit": "perMin",
+      "supportsLanguage": true,
+      "supportsKeywords": true,
+      "accuracy": "VERY HIGH",
+      "speed": "FAST",
+      "description": "Best default accuracy for transcribing a finished recording.",
+      "useCase": "Re-running saved audio for a clean, accurate transcript.",
+      "capabilities": {}
+    },
+    {
+      "id": "gpt-4o-mini-transcribe",
+      "provider": "openai",
+      "label": "GPT-4O-MINI-TRANSCRIBE",
+      "canLive": false,
+      "canFile": true,
+      "costRate": 0.003,
+      "costUnit": "perMin",
+      "supportsLanguage": true,
+      "supportsKeywords": true,
+      "accuracy": "HIGH",
+      "speed": "FAST",
+      "description": "Budget transcription at half the cost of GPT-4o-transcribe.",
+      "useCase": "High-volume or cost-sensitive transcription where top accuracy isn't critical.",
+      "capabilities": {}
+    },
+    {
+      "id": "whisper-1",
+      "provider": "openai",
+      "label": "WHISPER-1",
+      "canLive": false,
+      "canFile": true,
+      "costRate": 0.006,
+      "costUnit": "perMin",
+      "supportsLanguage": true,
+      "supportsKeywords": true,
+      "accuracy": "HIGH",
+      "speed": "MEDIUM",
+      "description": "Whisper with word-level timestamps — the only OpenAI model that returns them.",
+      "useCase": "When you need per-word timing, e.g. captions or alignment.",
+      "capabilities": { "wordTimestamps": true }
+    },
+    {
+      "id": "grok-stt-live",
+      "provider": "xai",
+      "label": "GROK STT (LIVE)",
+      "canLive": true,
+      "canFile": false,
+      "costRate": 0.2,
+      "costUnit": "perHour",
+      "supportsLanguage": true,
+      "supportsKeywords": true,
+      "accuracy": "HIGH",
+      "speed": "REALTIME",
+      "description": "xAI streaming speech-to-text over WebSocket — transcribes as you speak.",
+      "useCase": "Live dictation with diarization, word timestamps and keyword biasing.",
+      "capabilities": {
+        "wordTimestamps": true,
+        "diarization": true,
+        "multichannel": true
+      }
+    },
+    {
+      "id": "grok-stt-file",
+      "provider": "xai",
+      "label": "GROK STT (FILE)",
+      "canLive": false,
+      "canFile": true,
+      "costRate": 0.1,
+      "costUnit": "perHour",
+      "supportsLanguage": true,
+      "supportsKeywords": true,
+      "accuracy": "HIGH",
+      "speed": "FAST",
+      "description": "xAI batch speech-to-text for a saved recording — cheapest per hour. Same features plus formatting (ITN).",
+      "useCase": "Re-running saved audio, or multi-speaker files where you want speaker labels and timestamps.",
+      "capabilities": {
+        "wordTimestamps": true,
+        "diarization": true,
+        "inverseTextNormalization": true,
+        "multichannel": true
+      }
+    },
+    {
+      "id": "gemini-2.5-flash",
+      "provider": "gemini",
+      "label": "GEMINI 2.5 FLASH",
+      "canLive": false,
+      "canFile": true,
+      "costRate": 0.057,
+      "costUnit": "perHour",
+      "supportsLanguage": true,
+      "supportsKeywords": true,
+      "accuracy": "GOOD",
+      "speed": "MEDIUM",
+      "description": "Gemini multimodal transcription via prompt — not a dedicated ASR endpoint.",
+      "useCase": "Transcribing within the Google ecosystem, or flexible prompt-based control.",
+      "capabilities": {}
+    }
+  ]
+}
