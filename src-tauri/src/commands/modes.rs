@@ -28,6 +28,9 @@ const PINNED_KEY: &str = "pinnedModeId";
 const DEFAULT_KEY: &str = "defaultModeId";
 /// Ultimate fallback model when a mode references one the registry doesn't know.
 const DEFAULT_MODEL: &str = "gpt-realtime-whisper";
+/// Onboarding-created fallback mode. It is the one mode every user should have
+/// after adding their first provider key.
+const ONBOARDING_DEFAULT_ID: &str = "default";
 
 /// The currently active mode, cached as (mode id, reason). Kept fresh by the
 /// frontmost-app observer (which ignores VOXCTL itself so tabbing into the app
@@ -75,6 +78,29 @@ fn preset(id: &str, name: &str, language: &str, apps: &[&str], sites: &[&str]) -
         capabilities: Capabilities::default(),
         builtin: true,
     }
+}
+
+fn onboarding_default_mode(model: String) -> Mode {
+    Mode {
+        id: ONBOARDING_DEFAULT_ID.into(),
+        name: "DEFAULT".into(),
+        enabled: true,
+        language: "auto".into(),
+        keywords: Vec::new(),
+        trigger_apps: Vec::new(),
+        trigger_websites: Vec::new(),
+        model,
+        capabilities: Capabilities::default(),
+        builtin: true,
+    }
+}
+
+fn default_model_for_provider(reg: &registry::Registry, provider: &str) -> Result<String, String> {
+    if reg.provider_by_id(provider).is_none() {
+        return Err(format!("unknown provider: {provider}"));
+    }
+    reg.default_model_for(provider)
+        .ok_or_else(|| format!("no default model for provider: {provider}"))
 }
 
 /// Built-in presets shipped with the app.
@@ -268,6 +294,27 @@ pub fn unpin_mode(app: AppHandle) {
 pub fn set_default_mode(app: AppHandle, id: String) {
     write_store_string(&app, DEFAULT_KEY, Some(&id));
     recompute_and_emit(&app);
+}
+
+/// Onboarding bootstrap: once the first provider key validates, create/update
+/// the built-in Default Mode from that provider's registry default and make it
+/// the priority-3 fallback. Idempotent: repeated calls update the same mode.
+#[tauri::command]
+pub fn bootstrap_default_mode(app: AppHandle, provider: String) -> Result<Mode, String> {
+    let reg = registry::effective(&app);
+    let model = default_model_for_provider(&reg, &provider)?;
+
+    let mut modes = load(&app);
+    let default_mode = onboarding_default_mode(model);
+    if let Some(existing) = modes.iter_mut().find(|m| m.id == ONBOARDING_DEFAULT_ID) {
+        *existing = default_mode.clone();
+    } else {
+        modes.push(default_mode.clone());
+    }
+    persist(&app, &modes);
+    write_store_string(&app, DEFAULT_KEY, Some(ONBOARDING_DEFAULT_ID));
+    recompute_and_emit(&app);
+    Ok(default_mode)
 }
 
 /// Find the first enabled mode triggered by the given app/website. Website match
@@ -651,5 +698,36 @@ mod tests {
             "grok-stt-file".to_string(),
         ];
         assert_eq!(normalize_mode(m, &valid).model, "grok-stt-file");
+    }
+
+    #[test]
+    fn onboarding_default_mode_uses_fixed_builtin_shape() {
+        let m = onboarding_default_mode("grok-stt-live".into());
+        assert_eq!(m.id, ONBOARDING_DEFAULT_ID);
+        assert_eq!(m.name, "DEFAULT");
+        assert_eq!(m.language, "auto");
+        assert_eq!(m.model, "grok-stt-live");
+        assert!(m.enabled);
+        assert!(m.builtin);
+        assert!(m.trigger_apps.is_empty());
+        assert!(m.trigger_websites.is_empty());
+    }
+
+    #[test]
+    fn onboarding_provider_defaults_match_registry() {
+        let reg = registry::bundled();
+        assert_eq!(
+            default_model_for_provider(&reg, "openai").unwrap(),
+            "gpt-realtime-whisper"
+        );
+        assert_eq!(
+            default_model_for_provider(&reg, "xai").unwrap(),
+            "grok-stt-live"
+        );
+        assert_eq!(
+            default_model_for_provider(&reg, "gemini").unwrap(),
+            "gemini-2.5-flash"
+        );
+        assert!(default_model_for_provider(&reg, "anthropic").is_err());
     }
 }

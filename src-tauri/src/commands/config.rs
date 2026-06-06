@@ -31,6 +31,12 @@ pub struct Config {
     /// (row only, keep the WAV on disk). Defaulted for configs saved earlier.
     #[serde(default = "default_delete_behavior")]
     pub delete_behavior: String,
+    /// First-run onboarding is complete once mic/key/first recording are done.
+    #[serde(default)]
+    pub onboarding_completed: bool,
+    /// User skipped the optional Accessibility step during onboarding.
+    #[serde(default)]
+    pub accessibility_skipped: bool,
 }
 
 fn default_delete_behavior() -> String {
@@ -48,6 +54,8 @@ impl Default for Config {
             app_locale: "en".into(),
             default_language: None,
             delete_behavior: default_delete_behavior(),
+            onboarding_completed: false,
+            accessibility_skipped: false,
         }
     }
 }

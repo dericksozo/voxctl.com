@@ -1271,6 +1271,119 @@ button.mode-pill {
   filter: brightness(1.08);
 }
 
+/* ---------- ONBOARDING ---------- */
+.onboarding {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+.ob-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.ob-step {
+  font-family: var(--head);
+  font-size: 34px;
+  font-weight: 800;
+  color: var(--pink);
+  line-height: 0.95;
+}
+.ob-title {
+  font-family: var(--head);
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+}
+.ob-desc {
+  margin-top: 6px;
+  max-width: 760px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  line-height: 1.6;
+  color: var(--gray);
+}
+.ob-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ob-actions.inline {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.ob-providers {
+  max-width: 860px;
+}
+.ob-error {
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  padding: 10px 12px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+.ob-record-box,
+.ob-ready,
+.ob-ax {
+  border: 1px solid var(--line);
+  padding: 18px;
+}
+.ob-record-box {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+}
+.ob-record-title {
+  font-family: var(--head);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--ink);
+}
+.ob-record-btn,
+.ob-enter {
+  background: var(--pink);
+  border: 1px solid var(--pink);
+  color: #fff;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  padding: 13px 16px;
+  white-space: nowrap;
+}
+.ob-wait {
+  color: var(--pink);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+}
+.ob-ready {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 860px;
+}
+.ob-ready-line {
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  color: var(--ink);
+}
+.ob-ready-line .dim {
+  color: var(--gray);
+}
+.ob-ax {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+}
+.ob-enter {
+  align-self: flex-start;
+}
+
 /* ---------- SETTINGS ---------- */
 .settings {
   display: flex;
@@ -1852,6 +1965,14 @@ button.mode-pill {
   }
   .set-grid {
     grid-template-columns: 1fr;
+  }
+  .ob-record-box,
+  .ob-ax {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .ob-actions.inline {
+    justify-content: flex-start;
   }
 }
 @media (max-width: 480px) {
