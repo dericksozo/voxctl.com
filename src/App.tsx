@@ -101,7 +101,10 @@ export default function App() {
 
   const apiKeySet = anyKeyValidated(providers);
   const showOnboarding =
-    ready && providersReady && permsReady && (!config.onboardingCompleted || !perms.microphone || !apiKeySet);
+    ready &&
+    providersReady &&
+    permsReady &&
+    (!config.onboardingCompleted || !perms.microphone || !perms.accessibility || !apiKeySet);
   // SET status: the active mode's model has a validated key (you can dictate now).
   const activeModel = activeMode ? modelById(registry, activeMode.mode.model) : undefined;
   const modeUsable = !!activeModel && providerValidated(providers, activeModel.provider);
