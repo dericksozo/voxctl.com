@@ -1,16 +1,47 @@
 /* VOXCTL theme — ported from design/ prototype, extended for the real app. */
 
 :root {
-  --bg: #f4f5f6;
-  --ink: #16191d;
-  --ink-soft: #41474d;
-  --gray: #8c949b;
-  --line: rgba(22, 25, 29, 0.15);
-  --line-soft: rgba(22, 25, 29, 0.07);
-  --pink: #f60092;
-  --danger: #ff3b30;
-  --mono: "Share Tech Mono", "Space Mono", monospace;
-  --head: "Orbitron", sans-serif;
+  /* ---- surfaces ---- */
+  --bg: #e9ebee;
+  --bg-2: #eef0f2;
+  --panel: rgba(255, 255, 255, 0.42);
+  --panel-solid: #f3f4f6;
+  --cream: #f9f1e4;
+
+  /* ---- ink scale ---- */
+  --ink: #0c0d0f;
+  --ink-2: #5c6268;
+  --ink-3: #969ba1;
+  --ink-4: #b9bdc2;
+  /* Legacy aliases kept so existing components keep working. */
+  --ink-soft: var(--ink-2);
+  --gray: var(--ink-3);
+
+  /* ---- lines ---- */
+  --line: rgba(16, 20, 26, 0.16);
+  --line-soft: rgba(16, 20, 26, 0.09);
+  --line-faint: rgba(16, 20, 26, 0.045);
+
+  /* ---- accent (magenta) ---- */
+  --mag: #ff0a8c;
+  --mag-ink: #d80077;
+  --mag-soft: rgba(255, 10, 140, 0.1);
+  --mag-line: rgba(255, 10, 140, 0.45);
+  /* `--pink` is the name used throughout the app; it == the accent. App.tsx may
+     override it at runtime from the DEV tweaks theme. */
+  --pink: var(--mag);
+
+  /* ---- status ---- */
+  --ok: #00b368;
+  --warn: #ff8a00;
+  --err: #ff2d2d;
+  /* Legacy alias. */
+  --danger: var(--err);
+
+  /* ---- type ---- */
+  --mono: "JetBrains Mono", "Share Tech Mono", "Space Mono", ui-monospace, monospace;
+  --display: "Orbitron", sans-serif;
+  --head: var(--display);
 }
 * {
   box-sizing: border-box;
@@ -35,6 +66,251 @@ button {
   font-family: inherit;
   cursor: pointer;
 }
+input {
+  font-family: inherit;
+}
+::selection {
+  background: var(--mag);
+  color: #fff;
+}
+
+/* ============================================================
+   Shared interaction primitives (ported from the prototype).
+   Additive global classes for downstream panel phases to reuse.
+   ============================================================ */
+
+/* utility label */
+.lbl {
+  font-family: var(--mono);
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+/* buttons */
+.vx-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid var(--line);
+  padding: 8px 13px;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s, transform 0.04s;
+  white-space: nowrap;
+}
+.vx-btn:hover {
+  background: #fff;
+  border-color: var(--ink-3);
+}
+.vx-btn:active {
+  transform: translateY(1px);
+}
+.vx-btn--mag {
+  color: var(--mag);
+  border-color: var(--mag-line);
+}
+.vx-btn--mag:hover {
+  background: var(--mag-soft);
+  border-color: var(--mag);
+}
+.vx-btn--danger:hover {
+  background: rgba(255, 45, 45, 0.08);
+  border-color: var(--err);
+  color: var(--err);
+}
+.vx-btn[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* icon button */
+.vx-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: 0.1s;
+}
+.vx-ico:hover {
+  background: #fff;
+  color: var(--ink);
+  border-color: var(--ink-3);
+}
+.vx-ico:active {
+  transform: translateY(1px);
+}
+
+/* transcript / list card */
+.tcard {
+  position: relative;
+  border: 1px solid var(--line-soft);
+  background: var(--panel);
+  transition: opacity 0.18s, border-color 0.12s, background 0.12s;
+}
+.tcard:hover {
+  border-color: var(--line);
+}
+.tcard .hovctl {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.tcard:hover .hovctl {
+  opacity: 1;
+}
+.tcard--dim {
+  opacity: 0.34;
+}
+.tcard--dim:hover {
+  opacity: 0.62;
+}
+.tcard--open {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: var(--ink);
+  opacity: 1;
+}
+
+/* tabs */
+.vx-tab {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  padding: 7px 14px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: 0.1s;
+}
+.vx-tab:hover {
+  color: var(--ink);
+}
+.vx-tab--on {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.85);
+  border-color: var(--line);
+}
+
+/* split copy button */
+.splitcopy {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.55);
+}
+.splitcopy > button {
+  background: none;
+  border: none;
+}
+.splitcopy .sc-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 13px;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  color: var(--ink);
+  transition: 0.1s;
+}
+.splitcopy .sc-main:hover {
+  background: #fff;
+}
+.splitcopy .sc-div {
+  width: 1px;
+  background: var(--line);
+}
+.splitcopy .sc-caret {
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  color: var(--ink-2);
+  transition: 0.1s;
+}
+.splitcopy .sc-caret:hover {
+  background: #fff;
+  color: var(--ink);
+}
+
+/* provider logo wrapper + tooltip */
+.prov {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  color: var(--ink-2);
+}
+.prov .tip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: #fff;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  padding: 4px 8px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: 0.1s;
+  z-index: 40;
+}
+.prov .tip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 4px solid transparent;
+  border-top-color: var(--ink);
+}
+.prov:hover .tip {
+  opacity: 1;
+}
+.prov:hover {
+  color: var(--ink);
+}
+
+/* skeleton shimmer */
+@keyframes vxshimmer {
+  0% {
+    background-position: -340px 0;
+  }
+  100% {
+    background-position: 340px 0;
+  }
+}
+.skel {
+  background: linear-gradient(
+    90deg,
+    rgba(16, 20, 26, 0.05) 25%,
+    rgba(16, 20, 26, 0.1) 37%,
+    rgba(16, 20, 26, 0.05) 63%
+  );
+  background-size: 680px 100%;
+  animation: vxshimmer 1.25s infinite linear;
+}
+@media (prefers-reduced-motion: reduce) {
+  .skel {
+    animation: none;
+  }
+}
 
 /* ---------- app shell ---------- */
 .app {
@@ -53,9 +329,9 @@ button {
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  background-image: linear-gradient(var(--line-soft) 1px, transparent 1px),
-    linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
-  background-size: 38px 38px;
+  background-image: linear-gradient(var(--line-faint) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line-faint) 1px, transparent 1px);
+  background-size: 34px 34px;
   -webkit-mask-image: radial-gradient(130% 100% at 50% 35%, #000 35%, transparent 95%);
   mask-image: radial-gradient(130% 100% at 50% 35%, #000 35%, transparent 95%);
 }
@@ -65,7 +341,11 @@ button {
   inset: 0;
   z-index: 40;
   pointer-events: none;
-  background: repeating-linear-gradient(to bottom, rgba(22, 25, 29, 0.045) 0 1px, transparent 1px 3px);
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(16, 20, 26, 0.018) 0 1px,
+    transparent 1px 3px
+  );
   mix-blend-mode: multiply;
 }
 .app > * {
@@ -404,8 +684,21 @@ button.mode-pill {
   min-height: 4.8em;
   text-wrap: pretty;
 }
+/* Blinking magenta block caret (prototype style). Used self-closing:
+   `<span className="caret" />`. Self-animates; no `.blink` needed. */
 .caret {
-  color: var(--pink);
+  display: inline-block;
+  width: 0.55em;
+  height: 1.05em;
+  background: var(--mag);
+  vertical-align: -0.18em;
+  margin-left: 0.18em;
+  animation: blink 1.05s step-end infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .caret {
+    animation: none;
+  }
 }
 
 /* Pure-CSS blink — no JS interval, zero cost while idle. */
@@ -1505,6 +1798,14 @@ button.mode-pill {
   gap: 8px;
   font-size: 12px;
   letter-spacing: 0.14em;
+  color: var(--ink);
+}
+.prov-name .prov-logo {
+  color: var(--ink-2);
+  transition: color 0.12s;
+}
+.prov-row:hover .prov-name .prov-logo,
+.prov-row.ok .prov-name .prov-logo {
   color: var(--ink);
 }
 .prov-dot {

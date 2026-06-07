@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { ProviderLogo } from "./ProviderLogo";
 import { t } from "../i18n";
 import { deleteApiKey, setApiKey } from "../lib/ipc";
 import {
@@ -71,6 +72,9 @@ export function ProviderKeyCard({
       <div className="prov-head">
         <span className="prov-name">
           <span className={"prov-dot " + (err ? "err" : validated ? "on" : "off")} />
+          <span className="prov prov-logo" aria-hidden="true">
+            <ProviderLogo id={provider.id} size={15} />
+          </span>
           {provider.label}
         </span>
         {defaultModel ? (
