@@ -1,0 +1,188 @@
+/* ============================================================
+   SETTINGS panel — v3 restyle.
+   Scoped to `.settings` (the panel root is `.panel-body.settings`)
+   so it never leaks into onboarding, which reuses the same provider
+   cards / permission cards / primitives.
+
+   Reuses Phase 1 tokens (--mag, --ink-*, --line-*, --panel) and shared
+   classes (.vx-btn, .seg, .toggle, .kbd, .set-select, .prov-row,
+   .perm-card). The new bits here are the card-based config rows and the
+   per-section magenta header.
+   ============================================================ */
+
+.settings.panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 34px;
+  padding: 2px 8px 44px 2px;
+}
+
+/* ---- recording lockout banner ---- */
+.vx-set-rec {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--mag);
+  background: var(--mag-soft);
+  border: 1px solid var(--mag-line);
+}
+.vx-set-rec::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mag);
+  animation: vxSetBlink 1s steps(1) infinite;
+}
+@keyframes vxSetBlink {
+  50% {
+    opacity: 0.2;
+  }
+}
+
+/* ---- section + header ---- */
+.settings .set-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  scroll-margin-top: 8px;
+}
+
+.vx-set-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line-soft);
+  margin-bottom: 2px;
+}
+.vx-set-title {
+  font-family: var(--head);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--mag);
+  margin: 0;
+}
+.vx-set-desc {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+  max-width: 80ch;
+  margin: 0;
+}
+
+/* ---- config card (one setting per card) ---- */
+.vx-set-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 15px 18px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  transition: border-color 0.12s;
+}
+.vx-set-card:hover {
+  border-color: var(--line);
+}
+.vx-set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+.vx-set-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.vx-set-card-label {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.vx-set-card-sub {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+.vx-set-card-hint {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  line-height: 1.6;
+  color: var(--ink-3);
+}
+.vx-set-card--stack .vx-set-card-label {
+  margin-bottom: 2px;
+}
+
+/* stat read-out (e.g. disk usage), right-aligned in a card row */
+.vx-set-stat {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+/* free-standing explanatory note (providers section footer) */
+.vx-set-note {
+  font-size: 11px;
+  line-height: 1.7;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+  max-width: 80ch;
+  margin: 2px 0 0;
+}
+
+/* selects inside a stacked card span the full width */
+.settings .vx-set-card .set-select {
+  width: 100%;
+}
+
+/* ---- providers ---- */
+.settings .prov-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ---- permissions ---- */
+.settings .perm-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.vx-set-perm-btns {
+  display: flex;
+  gap: 8px;
+}
+.vx-set-perm-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+
+/* ---- storage purge row sits inside a stacked card ---- */
+.settings .storage-purge {
+  margin-top: 0;
+}
+
+/* ---- recording lockout: dim controls inside the body ---- */
+.settings [data-sec] :disabled {
+  cursor: not-allowed;
+}
