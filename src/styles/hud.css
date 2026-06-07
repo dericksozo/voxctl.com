@@ -3,11 +3,15 @@
    scanlines, corner brackets, the VOXCTL logo (pink chevron blinks), and a
    square level meter. No text, no language picker. */
 :root {
-  --pink: #f60092;
-  --ink: #16191d;
-  --line: rgba(22, 25, 29, 0.15);
-  --line-soft: rgba(22, 25, 29, 0.07);
-  --mono: "Share Tech Mono", monospace;
+  /* Mirror the main app palette (src/styles/theme.css) so the HUD reads as the
+     same product. Magenta accent, refined ink/line scale, JetBrains Mono. */
+  --mag: #ff0a8c;
+  --pink: var(--mag);
+  --ink: #0c0d0f;
+  --line: rgba(16, 20, 26, 0.16);
+  --line-soft: rgba(16, 20, 26, 0.09);
+  --err: #ff2d2d;
+  --mono: "JetBrains Mono", "Share Tech Mono", ui-monospace, monospace;
 }
 * {
   box-sizing: border-box;
@@ -39,7 +43,7 @@ body {
   align-items: center;
   gap: 12px;
   padding: 9px 16px;
-  background: rgba(244, 245, 246, 0.9);
+  background: rgba(243, 244, 246, 0.9);
   -webkit-backdrop-filter: blur(18px) saturate(140%);
   backdrop-filter: blur(18px) saturate(140%);
   border: 1px solid var(--line);
@@ -63,7 +67,7 @@ body {
   inset: 0;
   z-index: 2;
   pointer-events: none;
-  background: repeating-linear-gradient(to bottom, rgba(22, 25, 29, 0.05) 0 1px, transparent 1px 3px);
+  background: repeating-linear-gradient(to bottom, rgba(16, 20, 26, 0.05) 0 1px, transparent 1px 3px);
   mix-blend-mode: multiply;
 }
 .hud > * {
@@ -150,5 +154,5 @@ body {
 
 /* error: quiet red accent on the frame, no text */
 .hud.error {
-  border-color: rgba(255, 70, 70, 0.7);
+  border-color: color-mix(in srgb, var(--err) 70%, transparent);
 }
