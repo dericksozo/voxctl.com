@@ -1,7 +1,9 @@
+import "../styles/panels/stats.css";
 import { Card } from "../components/Primitives";
+import { ProviderLogo } from "../components/ProviderLogo";
 import { t } from "../i18n";
-import type { HistoryItem } from "../lib/types";
 import { estimateCost, formatCost, modelById, type Registry } from "../lib/registry";
+import type { HistoryItem } from "../lib/types";
 
 /** Usage overview computed from real history. Zeros on first run (honest). */
 export function HomePanel({
@@ -33,11 +35,23 @@ export function HomePanel({
     .slice(0, 4)
     .map(([n, c]) => ({ n: n.toUpperCase(), p: c / total }));
 
+  // Most-used model (by recording count) — surfaces the provider mark. Purely
+  // derived from existing history; no new data source.
+  const modelCounts = new Map<string, number>();
+  for (const h of history) modelCounts.set(h.modelId, (modelCounts.get(h.modelId) || 0) + 1);
+  const topModelEntry = [...modelCounts.entries()].sort((a, b) => b[1] - a[1])[0];
+  const topModel = topModelEntry ? modelById(registry, topModelEntry[0]) : undefined;
+
   const stats = [
-    { k: t("home.words"), v: words.toLocaleString(), d: `${history.length} RECORDINGS` },
-    { k: t("home.minutes"), v: String(minutes), d: `≈ ${(minutes / 60).toFixed(1)} HRS` },
-    { k: t("home.interfaces"), v: String(counts.size).padStart(2, "0"), d: "DISTINCT APPS" },
-    { k: t("home.spend"), v: formatCost(totalCost), d: t("home.spendSub") },
+    { k: t("home.words"), v: words.toLocaleString(), d: `${history.length} RECORDINGS`, mag: false },
+    { k: t("home.minutes"), v: String(minutes), d: `≈ ${(minutes / 60).toFixed(1)} HRS`, mag: false },
+    {
+      k: t("home.interfaces"),
+      v: String(counts.size).padStart(2, "0"),
+      d: "DISTINCT APPS",
+      mag: false,
+    },
+    { k: t("home.spend"), v: formatCost(totalCost), d: t("home.spendSub"), mag: true },
   ];
   const start = [
     { t: t("home.start.shortcut.t"), d: t("home.start.shortcut.d"), to: "settings" },
@@ -46,49 +60,74 @@ export function HomePanel({
   ];
 
   return (
-    <div className="panel-body home">
-      <div className="stat-row">
+    <div className="panel-body stats-panel">
+      <div className="bigstat-row">
         {stats.map((s) => (
-          <div className="stat" key={s.k}>
-            <div className="stat-k">{s.k}</div>
-            <div className="stat-v">{s.v}</div>
-            <div className="stat-d">{s.d}</div>
+          <div className={"bigstat" + (s.mag ? " bigstat--mag" : "")} key={s.k}>
+            <div className="bigstat-k">{s.k}</div>
+            <div className="bigstat-v">{s.v}</div>
+            <div className="bigstat-d">{s.d}</div>
           </div>
         ))}
       </div>
-      <div className="home-grid">
-        <Card className="home-start" label={t("home.gettingStarted")}>
-          <ul className="start-list">
+
+      <div className="stats-grid">
+        <Card className="gs-card" label={t("home.gettingStarted")}>
+          <ul className="gs-list">
             {start.map((g, i) => (
-              <li key={i} className="start-item" onClick={() => go(g.to)}>
-                <span className="start-main">
-                  <span className="start-t">{g.t}</span>
-                  <span className="start-d">{g.d}</span>
-                </span>
-                <span className="start-arr">→</span>
+              <li key={i}>
+                <button type="button" className="gs-row" onClick={() => go(g.to)}>
+                  <span className="gs-text">
+                    <span className="gs-t">{g.t}</span>
+                    <span className="gs-d">{g.d}</span>
+                  </span>
+                  <span className="gs-arr" aria-hidden="true">
+                    →
+                  </span>
+                </button>
               </li>
             ))}
           </ul>
         </Card>
-        <Card className="home-apps" label={t("home.topInterfaces")}>
-          {apps.length === 0 ? (
-            <div className="empty" style={{ padding: "10px 4px" }}>
-              // NO DATA YET
-            </div>
-          ) : (
-            <ul className="app-list">
-              {apps.map((a) => (
-                <li key={a.n}>
-                  <span className="app-n">{a.n}</span>
-                  <span className="app-bar">
-                    <i style={{ width: a.p * 100 + "%" }} />
-                  </span>
-                  <span className="app-p">{Math.round(a.p * 100)}%</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
+
+        <div className="stats-rcol">
+          {topModel ? (
+            <Card className="pm-card" label="PRIMARY MODEL">
+              <div className="pm-body">
+                <span className="prov pm-logo">
+                  <ProviderLogo id={topModel.provider} size={22} />
+                </span>
+                <span className="pm-meta">
+                  <span className="pm-name">{topModel.label}</span>
+                  <span className="pm-sub">{topModelEntry[1]} RECORDINGS</span>
+                </span>
+              </div>
+            </Card>
+          ) : null}
+
+          <Card className="ti-card" label={t("home.topInterfaces")}>
+            {apps.length === 0 ? (
+              <div className="ti-empty">// NO DATA YET</div>
+            ) : (
+              <ul className="ti-list">
+                {apps.map((a, i) => (
+                  <li key={a.n} className="ti-item">
+                    <div className="ti-head">
+                      <span className="ti-n">{a.n}</span>
+                      <span className="ti-p">{Math.round(a.p * 100)}%</span>
+                    </div>
+                    <span className="ti-bar">
+                      <i
+                        className={i === 0 ? "is-top" : ""}
+                        style={{ width: a.p * 100 + "%" }}
+                      />
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        </div>
       </div>
     </div>
   );
