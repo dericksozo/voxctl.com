@@ -3,13 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { t } from "../i18n";
 import { langLabel } from "../lib/languages";
-import {
-  deleteRecording,
-  deleteRecordings,
-  incrementCopy,
-  retranscribe,
-  toggleFavorite,
-} from "../lib/ipc";
+import { deleteRecording, incrementCopy, retranscribe } from "../lib/ipc";
 import type { HistoryItem, Mode } from "../lib/types";
 import { estimateCost, formatCost, modelById, type Registry } from "../lib/registry";
 import { ProviderLogo } from "../components/ProviderLogo";
@@ -159,21 +153,6 @@ const IcoAlert = ({ size = 38 }: IcoProps) => (
     <path d="M12 9v4M12 17h.01" />
   </Svg>
 );
-const IcoStar = ({ size = 15, on = false }: IcoProps & { on?: boolean }) => (
-  <svg
-    width={size}
-    height={size}
-    viewBox="0 0 24 24"
-    fill={on ? "currentColor" : "none"}
-    stroke="currentColor"
-    strokeWidth={1.6}
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
-    <path d="M12 2.5l2.9 6.2 6.6.7-4.9 4.5 1.3 6.6L12 18.2 6.1 21l1.3-6.6L2.5 9.4l6.6-.7z" />
-  </svg>
-);
 
 /** Provider brand chip with mode tooltip (reuses the shared `.prov` class). */
 function ProviderChip({ provider, mode, size = 15 }: { provider?: string; mode?: string; size?: number }) {
@@ -212,14 +191,8 @@ export function HistoryPanel({
   const [rerunFor, setRerunFor] = useState<number | null>(null);
   const [confirmDel, setConfirmDel] = useState<number | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
-  // Search / filter
+  // Search — the only list control on Home.
   const [query, setQuery] = useState("");
-  const [appFilter, setAppFilter] = useState("");
-  const [langFilter, setLangFilter] = useState("");
-  const [favOnly, setFavOnly] = useState(false);
-  // Bulk selection
-  const [selectMode, setSelectMode] = useState(false);
-  const [selected, setSelected] = useState<Set<number>>(new Set());
   // No error signal exists in props today; default false. RETRY calls onChange().
   // Surfaced for the verification phase to wire to a real archive-read error.
   const [archiveError] = useState(false);
@@ -301,16 +274,6 @@ export function HistoryPanel({
     }
   }
 
-  async function doFavorite(e: React.MouseEvent, item: HistoryItem) {
-    e.stopPropagation();
-    try {
-      await toggleFavorite(item.id);
-      onChange();
-    } catch {
-      /* ignore */
-    }
-  }
-
   async function doDelete(e: React.MouseEvent, item: HistoryItem) {
     e.stopPropagation();
     try {
@@ -336,27 +299,6 @@ export function HistoryPanel({
     }
   }
 
-  function toggleSelect(id: number) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  async function deleteSelected() {
-    if (selected.size === 0) return;
-    try {
-      await deleteRecordings([...selected]);
-      onChange();
-    } catch {
-      /* ignore */
-    }
-    setSelected(new Set());
-    setSelectMode(false);
-  }
-
   // ---- readiness signal: null/undefined history = still loading ----
   const loading = history == null;
   const items: HistoryItem[] = history ?? [];
@@ -365,15 +307,8 @@ export function HistoryPanel({
   const fileModes = modes.filter((m) => modelById(registry, m.model)?.canFile);
   const modeLabel = (m: Mode) => `${m.name} · ${modelById(registry, m.model)?.label ?? m.model}`;
 
-  // Distinct apps/languages present, for the filter dropdowns.
-  const apps = [...new Set(items.map((h) => h.appName || h.website).filter(Boolean))] as string[];
-  const langs = [...new Set(items.map((h) => h.language).filter(Boolean))];
-
   const q = query.trim().toLowerCase();
   const filtered = items.filter((h) => {
-    if (favOnly && !h.favorite) return false;
-    if (appFilter && (h.appName || h.website || "") !== appFilter) return false;
-    if (langFilter && h.language !== langFilter) return false;
     if (q) {
       const hay = `${h.transcript} ${h.appName ?? ""} ${h.website ?? ""} ${h.modeName}`.toLowerCase();
       if (!hay.includes(q)) return false;
@@ -516,7 +451,7 @@ export function HistoryPanel({
         </div>
       </div>
 
-      {/* toolbar: search + filters + bulk-select */}
+      {/* toolbar: transcript search only */}
       <div className="hm-toolbar">
         <div className="hm-search">
           <span className="hm-search-ico">
@@ -539,60 +474,7 @@ export function HistoryPanel({
             </button>
           ) : null}
         </div>
-        {apps.length > 0 ? (
-          <select className="hm-select" value={appFilter} onChange={(e) => setAppFilter(e.target.value)}>
-            <option value="">{t("history.filterApp")}</option>
-            {apps.map((a) => (
-              <option key={a} value={a}>
-                {a.toUpperCase()}
-              </option>
-            ))}
-          </select>
-        ) : null}
-        {langs.length > 1 ? (
-          <select className="hm-select" value={langFilter} onChange={(e) => setLangFilter(e.target.value)}>
-            <option value="">{t("history.filterLang")}</option>
-            {langs.map((l) => (
-              <option key={l} value={l}>
-                {langLabel(l)}
-              </option>
-            ))}
-          </select>
-        ) : null}
-        <button
-          type="button"
-          className={"vx-btn" + (favOnly ? " vx-btn--mag" : "")}
-          onClick={() => setFavOnly((v) => !v)}
-        >
-          <IcoStar size={13} on={favOnly} />
-          {t("history.filterFav")}
-        </button>
-        <button
-          type="button"
-          className={"vx-btn" + (selectMode ? " vx-btn--mag" : "")}
-          onClick={() => {
-            setSelectMode((v) => !v);
-            setSelected(new Set());
-          }}
-        >
-          {t("history.select")}
-        </button>
       </div>
-
-      {selectMode ? (
-        <div className="hm-selbar">
-          <span>{t("history.selectedCount", { n: selected.size })}</span>
-          <button
-            type="button"
-            className="vx-btn vx-btn--danger"
-            disabled={selected.size === 0}
-            onClick={deleteSelected}
-          >
-            <IcoTrash size={14} />
-            {t("history.deleteSelected")}
-          </button>
-        </div>
-      ) : null}
 
       {groups.length === 0 ? (
         // ---- EMPTY-SEARCH state (filters exclude everything) ----
@@ -622,7 +504,6 @@ export function HistoryPanel({
                 const cp = copied === item.id;
                 const ctx = item.appName || item.website;
                 const sc = statusChip(item.status);
-                const sel = selected.has(item.id);
                 const size = fmtBytes(item.audioBytes);
                 const provider = modelById(registry, item.modelId)?.provider;
                 const costVal = estimateCost(modelById(registry, item.modelId), item.durationSecs);
@@ -633,24 +514,11 @@ export function HistoryPanel({
                     key={item.id}
                     className={"tcard" + (exp ? " tcard--open" : dim ? " tcard--dim" : "")}
                   >
-                    {/* collapsed header — click toggles (or selects in bulk mode) */}
+                    {/* collapsed header — click toggles expansion */}
                     <div
                       className="hm-card-head"
-                      onClick={() =>
-                        selectMode ? toggleSelect(item.id) : setExpanded(exp ? null : item.id)
-                      }
+                      onClick={() => setExpanded(exp ? null : item.id)}
                     >
-                      {selectMode ? (
-                        <span className="hm-chk">
-                          {sel ? (
-                            <IcoCheck size={16} />
-                          ) : (
-                            <span
-                              style={{ width: 14, height: 14, border: "1px solid var(--ink-3)" }}
-                            />
-                          )}
-                        </span>
-                      ) : null}
                       <span className="hm-time">{timeLabel(item.createdAt)}</span>
                       <div className="hm-preview-wrap">
                         {exp ? null : (
@@ -660,14 +528,9 @@ export function HistoryPanel({
                         )}
                       </div>
                       <div className="hm-head-right">
-                        {item.favorite ? (
-                          <span className="hm-fav on" aria-label="favorite">
-                            <IcoStar size={15} on />
-                          </span>
-                        ) : null}
                         {sc ? <span className={"hm-status " + sc.cls}>{sc.label}</span> : null}
                         {ctx ? <span className="hm-ctx">{ctx.toUpperCase()}</span> : null}
-                        {!exp && !selectMode ? (
+                        {!exp ? (
                           <div
                             className="hovctl"
                             style={{ display: "flex", alignItems: "center", gap: 12 }}
@@ -695,7 +558,7 @@ export function HistoryPanel({
                     </div>
 
                     {/* expanded body */}
-                    {exp && !selectMode ? (
+                    {exp ? (
                       <div className="hm-body">
                         <div className={"hm-text" + (hasText ? "" : " placeholder")}>
                           {previewText(item)}
@@ -728,15 +591,6 @@ export function HistoryPanel({
                             {item.copyCount > 0 ? (
                               <span style={{ color: "var(--ink-3)" }}>{fmtCount(item.copyCount)}</span>
                             ) : null}
-                          </button>
-
-                          <button
-                            type="button"
-                            className={"vx-btn" + (item.favorite ? " vx-btn--mag" : "")}
-                            onClick={(e) => doFavorite(e, item)}
-                          >
-                            <IcoStar size={14} on={item.favorite} />
-                            {t("history.favorite")}
                           </button>
 
                           {/* re-transcribe (file-capable modes only) */}
