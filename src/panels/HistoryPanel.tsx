@@ -2,7 +2,6 @@ import "../styles/panels/home.css";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { t } from "../i18n";
-import { langLabel } from "../lib/languages";
 import { deleteRecording, incrementCopy, retranscribe } from "../lib/ipc";
 import type { HistoryItem, Mode } from "../lib/types";
 import { estimateCost, formatCost, modelById, type Registry } from "../lib/registry";
@@ -30,6 +29,8 @@ const timeLabel = (ts: number) => {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 const durLabel = (s: number) => `${Math.floor(s / 60)}:${pad(Math.round(s % 60))}`;
+/** How long the transcription took (ms → "x.xs"), or "" when not measured. */
+const tookLabel = (ms: number) => (ms > 0 ? `${(ms / 1000).toFixed(1)}s` : "");
 const fmtCount = (n: number) => (n >= 10 ? "10+" : String(n));
 
 function fmtBytes(n: number): string {
@@ -538,6 +539,7 @@ export function HistoryPanel({
                 const ctx = item.appName || item.website;
                 const sc = statusChip(item.status);
                 const size = fmtBytes(item.audioBytes);
+                const took = tookLabel(item.transcriptionMs);
                 const provider = modelById(registry, item.modelId)?.provider;
                 const costVal = estimateCost(modelById(registry, item.modelId), item.durationSecs);
                 const cost = costVal > 0 ? formatCost(costVal) : "";
@@ -736,20 +738,18 @@ export function HistoryPanel({
                             <span className="hm-meta-k">DUR</span>
                             <span className="hm-meta-v">{durLabel(item.durationSecs)}</span>
                           </span>
-                          <span className="hm-meta-cell">
-                            <span className="hm-meta-k">{t("history.words")}</span>
-                            <span className="hm-meta-v">{item.words}</span>
-                          </span>
+                          {took ? (
+                            <span className="hm-meta-cell">
+                              <span className="hm-meta-k">{t("history.took")}</span>
+                              <span className="hm-meta-v">{took}</span>
+                            </span>
+                          ) : null}
                           {size ? (
                             <span className="hm-meta-cell">
                               <span className="hm-meta-k">SIZE</span>
                               <span className="hm-meta-v">{size}</span>
                             </span>
                           ) : null}
-                          <span className="hm-meta-cell">
-                            <span className="hm-meta-k">{t("modes.lang")}</span>
-                            <span className="hm-meta-v">{langLabel(item.language)}</span>
-                          </span>
                           {cost ? (
                             <span className="hm-meta-cell">
                               <span className="hm-meta-k">COST</span>
