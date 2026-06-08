@@ -761,6 +761,10 @@ button.mode-pill {
   min-width: 0;
   height: 100%;
   overflow-y: auto;
+  /* Only the vertical axis scrolls. Without this, `overflow-y: auto` promotes
+     overflow-x to `auto` too, so any child a few px too wide produces a stray
+     horizontal scrollbar and dead space on the right. */
+  overflow-x: hidden;
   padding-right: 4px;
 }
 .panel-body::-webkit-scrollbar {
