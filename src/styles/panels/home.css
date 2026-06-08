@@ -112,36 +112,6 @@
   border: none;
   background: transparent;
 }
-.hm-select {
-  background: rgba(255, 255, 255, 0.55);
-  border: 1px solid var(--line);
-  color: var(--ink-2);
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  padding: 9px 10px;
-  transition: border-color 0.12s;
-}
-.hm-select:focus {
-  outline: none;
-  border-color: var(--mag);
-}
-
-/* ---------- bulk-select bar ---------- */
-.hm-selbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 14px;
-  margin-bottom: 14px;
-  border: 1px solid var(--mag-line);
-  background: var(--mag-soft);
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  color: var(--ink-2);
-}
 
 /* ---------- day groups ---------- */
 .hm-group {
@@ -215,27 +185,6 @@
   gap: 12px;
   padding-top: 2px;
   flex: none;
-}
-.hm-chk {
-  color: var(--mag);
-  display: inline-flex;
-  align-items: center;
-}
-.hm-fav {
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--ink-3);
-  display: inline-flex;
-  align-items: center;
-  padding: 0;
-  transition: color 0.12s;
-}
-.hm-fav:hover {
-  color: var(--mag);
-}
-.hm-fav.on {
-  color: var(--mag);
 }
 .hm-status {
   font-size: 10px;
