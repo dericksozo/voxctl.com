@@ -29,7 +29,7 @@
 }
 .bigstat-k {
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 11.5px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   line-height: 1.4;
@@ -50,7 +50,7 @@
 .bigstat-d {
   margin-top: 4px;
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 11.5px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-3);
@@ -83,7 +83,7 @@
   display: block;
   font-family: var(--mono);
   font-weight: 500;
-  font-size: 12.5px;
+  font-size: 11.5px;
   letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--ink-3);
@@ -129,14 +129,14 @@
 }
 .gs-t {
   font-family: var(--mono);
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.08em;
   color: var(--ink);
 }
 .gs-d {
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: 11px;
   letter-spacing: 0.04em;
   line-height: 1.5;
   color: var(--ink-3);
@@ -183,7 +183,7 @@
 }
 .pm-name {
   font-family: var(--mono);
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.06em;
   color: var(--ink);
@@ -193,7 +193,7 @@
 }
 .pm-sub {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 11px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-3);
@@ -224,13 +224,13 @@
 }
 .ti-n {
   font-family: var(--mono);
-  font-size: 14px;
+  font-size: 12px;
   letter-spacing: 0.08em;
   color: var(--ink);
 }
 .ti-p {
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 11.5px;
   letter-spacing: 0.1em;
   color: var(--ink-3);
 }
@@ -253,7 +253,7 @@
 }
 .ti-empty {
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: 11px;
   letter-spacing: 0.08em;
   color: var(--ink-3);
   padding: 10px 0;

@@ -66,7 +66,7 @@
 }
 .vx-set-title {
   font-family: var(--head);
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.14em;
   color: var(--mag);
@@ -109,7 +109,7 @@
 }
 .vx-set-card-label {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 11px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink);
@@ -133,7 +133,7 @@
 /* stat read-out (e.g. disk usage), right-aligned in a card row */
 .vx-set-stat {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 11px;
   letter-spacing: 0.08em;
   color: var(--ink-2);
   white-space: nowrap;

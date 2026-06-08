@@ -95,7 +95,7 @@
   margin-bottom: 10px;
 }
 .onb-sub {
-  font-size: 14px;
+  font-size: 12px;
   letter-spacing: 0.04em;
   color: var(--ink-2);
   margin: 0;
@@ -128,7 +128,7 @@
   gap: 16px;
 }
 .onb-step-n {
-  font-size: 12px;
+  font-size: 11px;
   letter-spacing: 0.1em;
   color: var(--ink-3);
   width: 46px;
@@ -157,14 +157,14 @@
   min-width: 0;
 }
 .onb-step-title {
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.08em;
   color: var(--ink);
   margin-bottom: 4px;
 }
 .onb-step-desc {
-  font-size: 12.5px;
+  font-size: 11.5px;
   letter-spacing: 0.04em;
   color: var(--ink-3);
   line-height: 1.5;
@@ -181,7 +181,7 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: 11px;
   letter-spacing: 0.12em;
   white-space: nowrap;
 }
@@ -230,13 +230,13 @@
   border-top: 1px solid var(--line-soft);
 }
 .onb-expand-label {
-  font-size: 12px;
+  font-size: 11px;
   letter-spacing: 0.14em;
   color: var(--ink-3);
   margin-bottom: 12px;
 }
 .onb-key-summary {
-  font-size: 13px;
+  font-size: 11px;
   letter-spacing: 0.06em;
   color: var(--ink-2);
 }
@@ -263,7 +263,7 @@
   gap: 14px;
 }
 .onb-progress-txt {
-  font-size: 13px;
+  font-size: 11px;
   letter-spacing: 0.14em;
   color: var(--ink-2);
   white-space: nowrap;
@@ -283,7 +283,7 @@
 }
 .onb-enter {
   padding: 12px 26px;
-  font-size: 14px;
+  font-size: 12px;
 }
 .onb-enter.ready {
   background: var(--mag);
@@ -298,6 +298,6 @@
 .onb-error {
   margin-top: 16px;
   color: var(--err);
-  font-size: 12.5px;
+  font-size: 11.5px;
   letter-spacing: 0.06em;
 }
