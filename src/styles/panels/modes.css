@@ -1,0 +1,463 @@
+/* MODES panel — design-overhaul v3 restyle.
+ * Scoped class prefix `vxm-` so these styles never collide with the legacy
+ * .modes/.mode-card rules still living in theme.css. Reuses Phase 1 shared
+ * tokens (--mag, --ink-*, --line-*, --panel, --display) and shared classes
+ * (.vx-btn, .lbl, .prov). Visual only — no behavior lives here. */
+
+/* ---------- list view ---------- */
+.vxm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* "DEFINE NEW MODE" — dashed magenta call-to-action (functional). */
+.vxm-define {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  border: 1.5px dashed var(--mag-line);
+  background: var(--mag-soft);
+  color: var(--mag);
+  padding: 18px;
+  font-family: var(--mono);
+  font-size: 15px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.vxm-define:hover {
+  background: rgba(255, 10, 140, 0.16);
+  border-color: var(--mag);
+}
+.vxm-define-plus {
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* ---------- mode card ---------- */
+.vxm-card {
+  border: 1px solid var(--line-soft);
+  background: var(--panel);
+  padding: 22px 26px;
+  transition: opacity 0.15s, border-color 0.12s, background 0.12s;
+}
+.vxm-card:hover {
+  border-color: var(--line);
+}
+.vxm-card.is-active {
+  border-color: var(--mag-line);
+  background: var(--mag-soft);
+}
+.vxm-card.is-off {
+  opacity: 0.45;
+}
+.vxm-card.is-off:hover {
+  opacity: 0.7;
+}
+
+.vxm-card-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.vxm-name {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 24px;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+.vxm-active-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  color: var(--mag);
+  border: 1px solid var(--mag-line);
+  padding: 3px 8px;
+}
+.vxm-card-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+/* compact square delete button */
+.vxm-del {
+  padding: 8px 11px;
+}
+
+/* ---------- rule row (model / trigger / lang / keywords) ---------- */
+.vxm-rules {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 30px;
+  margin-top: 18px;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+}
+.vxm-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.vxm-field-k {
+  color: var(--ink-3);
+  letter-spacing: 0.12em;
+  flex: 0 0 auto;
+}
+.vxm-field-v {
+  color: var(--ink);
+}
+.vxm-field-v.is-muted {
+  color: var(--ink-3);
+}
+.vxm-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  min-width: 0;
+}
+.vxm-model .prov {
+  color: var(--ink-2);
+}
+.vxm-live {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: var(--mag);
+  border: 1px solid var(--mag-line);
+  padding: 1px 6px;
+}
+.vxm-file {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: var(--ink-3);
+  border: 1px solid var(--line);
+  padding: 1px 6px;
+}
+.vxm-keywords {
+  max-width: 46ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- edit form ---------- */
+.vxm-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.vxm-form-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.vxm-form-title {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+}
+
+.vxm-field-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.vxm-field-block > .lbl {
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  color: var(--ink);
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.vxm-hint {
+  color: var(--ink-3);
+  letter-spacing: 0.1em;
+  text-transform: none;
+  font-weight: 400;
+}
+
+/* text inputs / selects */
+.vxm-input,
+.vxm-select {
+  width: 100%;
+  padding: 13px 16px;
+  font-family: var(--mono);
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--line);
+  outline: none;
+  transition: border-color 0.1s;
+}
+.vxm-input::placeholder {
+  color: var(--ink-4);
+  letter-spacing: 0.08em;
+}
+.vxm-input:focus,
+.vxm-select:focus {
+  border-color: var(--mag);
+}
+.vxm-select {
+  appearance: none;
+  cursor: pointer;
+}
+
+.vxm-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+/* capability toggle rows */
+.vxm-caps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--line-soft);
+  background: var(--panel);
+  padding: 14px 18px;
+}
+.vxm-cap-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.vxm-cap-label {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  color: var(--ink-2);
+}
+
+/* save button — magenta filled */
+.vxm-save {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  background: var(--mag);
+  border: 1px solid var(--mag);
+  color: #fff;
+  font-family: var(--mono);
+  font-size: 13px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  padding: 14px 32px;
+  cursor: pointer;
+  transition: filter 0.12s;
+  margin-top: 4px;
+}
+.vxm-save:hover {
+  filter: brightness(1.08);
+}
+
+/* ---------- model picker ---------- */
+.vxm-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border: 1px solid var(--line-soft);
+  background: var(--panel);
+  padding: 14px;
+}
+.vxm-mp-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.vxm-mp-group.is-locked {
+  opacity: 0.55;
+}
+.vxm-mp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  color: var(--ink-3);
+  margin: 2px 0 4px;
+}
+.vxm-mp-prov {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-2);
+}
+.vxm-mp-prov .prov {
+  color: var(--ink-2);
+}
+.vxm-prov-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-4);
+}
+.vxm-prov-dot.on {
+  background: var(--ok);
+}
+.vxm-mp-addkey {
+  background: none;
+  border: none;
+  color: var(--mag);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+}
+.vxm-mp-addkey:hover {
+  color: var(--mag-ink);
+}
+
+.vxm-mp-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.4);
+  border: 1px solid var(--line-soft);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+  padding: 11px 14px;
+  text-align: left;
+  transition: border-color 0.1s, background 0.1s;
+}
+.vxm-mp-row:hover:not(:disabled) {
+  border-color: var(--mag-line);
+  background: #fff;
+}
+.vxm-mp-row.is-sel {
+  border-color: var(--mag);
+  background: var(--mag-soft);
+}
+.vxm-mp-row:disabled {
+  cursor: not-allowed;
+  color: var(--ink-3);
+}
+.vxm-mp-radio {
+  color: var(--mag);
+  font-size: 11px;
+  margin-top: 2px;
+}
+.vxm-mp-row:disabled .vxm-mp-radio {
+  color: var(--ink-4);
+}
+.vxm-mp-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.vxm-mp-name-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.vxm-mp-name {
+  flex: 1;
+  color: var(--ink);
+}
+.vxm-mp-desc {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+}
+.vxm-badge {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--mag);
+  border: 1px solid var(--mag-line);
+  padding: 1px 6px;
+}
+.vxm-mp-cost {
+  color: var(--ink-3);
+  font-size: 11px;
+  min-width: 84px;
+  text-align: right;
+}
+.vxm-mp-legend {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+  margin-top: 2px;
+}
+
+/* ---------- selected-model info ---------- */
+.vxm-info {
+  border: 1px solid var(--mag-line);
+  background: var(--mag-soft);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.vxm-info-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.vxm-info-name {
+  flex: 1;
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  color: var(--ink);
+}
+.vxm-info-cost {
+  color: var(--ink-2);
+  font-size: 12px;
+}
+.vxm-info-desc {
+  font-size: 12px;
+  line-height: 1.6;
+  letter-spacing: 0.04em;
+  color: var(--ink-2);
+}
+.vxm-info-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--ink-2);
+}
+.vxm-info-k {
+  color: var(--ink-3);
+  margin-right: 5px;
+}
+.vxm-info-use {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+}
+
+.vxm-empty {
+  color: var(--ink-3);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  padding: 24px 4px;
+}
+
+@media (max-width: 720px) {
+  .vxm-grid {
+    grid-template-columns: 1fr;
+  }
+}

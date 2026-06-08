@@ -35,10 +35,13 @@ import {
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
+// Nav order: 01 HOME (transcript log), 02 MODES, 03 STATS (usage dashboard),
+// 04 SETTINGS. Note "home" now renders the transcript log and "stats" renders
+// the usage dashboard (the panels swapped roles in the overhaul).
 const MENU = [
   { id: "home", label: t("nav.home") },
-  { id: "history", label: t("nav.history") },
   { id: "modes", label: t("nav.modes") },
+  { id: "stats", label: t("nav.stats") },
   { id: "settings", label: t("nav.settings") },
 ];
 
@@ -98,7 +101,10 @@ export default function App() {
 
   const apiKeySet = anyKeyValidated(providers);
   const showOnboarding =
-    ready && providersReady && permsReady && (!config.onboardingCompleted || !perms.microphone || !apiKeySet);
+    ready &&
+    providersReady &&
+    permsReady &&
+    (!config.onboardingCompleted || !perms.microphone || !perms.accessibility || !apiKeySet);
   // SET status: the active mode's model has a validated key (you can dictate now).
   const activeModel = activeMode ? modelById(registry, activeMode.mode.model) : undefined;
   const modeUsable = !!activeModel && providerValidated(providers, activeModel.provider);
@@ -130,15 +136,15 @@ export default function App() {
   const minutes = Math.round(history.reduce((s, h) => s + h.durationSecs, 0) / 60);
 
   const META: Record<string, string> = {
-    home: t("nav.home.meta"),
-    history: `${history.length} RECORDINGS · ${minutes} MIN`,
+    home: `${history.length} RECORDINGS · ${minutes} MIN`,
     modes: `${modes.length} MODES · CONTEXT-AWARE PRESETS`,
-    settings: "SYSTEM CONFIG",
+    stats: t("nav.stats.meta"),
+    settings: t("nav.settings.meta"),
   };
   const DESC: Record<string, string> = {
     home: t("nav.home.desc"),
-    history: t("nav.history.desc"),
     modes: t("nav.modes.desc"),
+    stats: t("nav.stats.desc"),
     settings: t("nav.settings.desc"),
   };
 
@@ -214,8 +220,6 @@ export default function App() {
     }
     switch (view) {
       case "home":
-        return <HomePanel history={history} registry={registry} go={switchTo} />;
-      case "history":
         return (
           <HistoryPanel
             history={history}
@@ -226,6 +230,8 @@ export default function App() {
             stopToken={audioStopToken}
           />
         );
+      case "stats":
+        return <HomePanel history={history} registry={registry} go={switchTo} />;
       case "modes":
         return (
           <ModesPanel
@@ -343,7 +349,7 @@ export default function App() {
           <Frame className="sysdesc" label="// SYS.DESC">
             <p className="sysdesc-text">
               <Typewriter text={descText} run={phase !== "closing"} speed={11} />
-              <span className="caret blink">█</span>
+              <span className="caret" />
             </p>
           </Frame>
         </div>
@@ -351,7 +357,12 @@ export default function App() {
         <div className="stage">
           <Frame
             className={frameCls}
-            label={<Typewriter text={labelText} run={phase !== "closing"} speed={11} />}
+            label={
+              <>
+                <Typewriter text={labelText} run={phase !== "closing"} speed={11} />
+                {phase !== "closing" ? <span className="caret" /> : null}
+              </>
+            }
             tr="VX-0xA7"
           >
             <div className="content">{renderPanel()}</div>

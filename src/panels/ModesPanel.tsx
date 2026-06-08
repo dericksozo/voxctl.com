@@ -1,5 +1,7 @@
 import { useState } from "react";
+import "../styles/panels/modes.css";
 import { Toggle } from "../components/Primitives";
+import { ProviderLogo } from "../components/ProviderLogo";
 import { t } from "../i18n";
 import { langLabel, LANGUAGES } from "../lib/languages";
 import { deleteMode, saveMode, setModeEnabled } from "../lib/ipc";
@@ -113,13 +115,14 @@ export function ModesPanel({
   }
 
   return (
-    <div className="panel-body modes">
+    <div className="panel-body vxm-list">
       <button
         type="button"
-        className="add-mode top"
+        className="vxm-define"
         onClick={() => setEditing(emptyMode(defaultModelId(registry, providers)))}
       >
-        ＋ {t("modes.add")}
+        <span className="vxm-define-plus">＋</span>
+        {t("modes.add")}
       </button>
       {modes.map((m) => {
         const triggers = [...m.triggerApps, ...m.triggerWebsites];
@@ -130,18 +133,24 @@ export function ModesPanel({
             ? (registry.providers.find((p) => p.id === model.provider)?.label ?? model.provider)
             : null;
         return (
-          <div key={m.id} className={"mode-card" + (active ? " active" : "") + (m.enabled ? "" : " off")}>
-            <div className="mode-top">
-              <div className="mode-id">
-                <span className="mode-n">{m.name}</span>
-                {active ? <span className="mode-badge">● {t("modes.active")}</span> : null}
-              </div>
-              <div className="mode-actions">
-                <button type="button" className="fa" onClick={() => setEditing({ ...m })}>
+          <div
+            key={m.id}
+            className={"vxm-card" + (active ? " is-active" : "") + (m.enabled ? "" : " is-off")}
+          >
+            <div className="vxm-card-head">
+              <span className="vxm-name">{m.name}</span>
+              {active ? <span className="vxm-active-badge">● {t("modes.active")}</span> : null}
+              <div className="vxm-card-actions">
+                <button type="button" className="vx-btn" onClick={() => setEditing({ ...m })}>
                   {t("modes.edit")}
                 </button>
                 {m.builtin ? null : (
-                  <button type="button" className="fa danger" onClick={() => remove(m)}>
+                  <button
+                    type="button"
+                    className="vx-btn vx-btn--danger vxm-del"
+                    aria-label={t("modes.edit")}
+                    onClick={() => remove(m)}
+                  >
                     ✕
                   </button>
                 )}
@@ -152,25 +161,38 @@ export function ModesPanel({
                 />
               </div>
             </div>
-            <div className="mode-rules">
-              <span className="mr">
-                <span className="mr-k">{t("modes.model")}</span>
-                {providerLabel ? `${providerLabel} · ` : ""}
-                {model?.label ?? m.model.toUpperCase()}
-                {model ? <span className="mode-badge mp-badge">{modelBadge(model)}</span> : null}
+            <div className="vxm-rules">
+              <span className="vxm-field">
+                <span className="vxm-field-k">{t("modes.model")}</span>
+                <span className="vxm-model">
+                  {model ? (
+                    <span className="prov" aria-hidden="true">
+                      <ProviderLogo id={model.provider} size={13} />
+                    </span>
+                  ) : null}
+                  {providerLabel ? `${providerLabel} · ` : ""}
+                  {model?.label ?? m.model.toUpperCase()}
+                  {model ? (
+                    <span className={model.canLive ? "vxm-live" : "vxm-file"}>
+                      {modelBadge(model)}
+                    </span>
+                  ) : null}
+                </span>
               </span>
-              <span className="mr">
-                <span className="mr-k">{t("modes.trigger")}</span>
-                {triggers.length ? triggers.join(" · ") : "—"}
+              <span className="vxm-field">
+                <span className="vxm-field-k">{t("modes.trigger")}</span>
+                <span className={"vxm-field-v" + (triggers.length ? "" : " is-muted")}>
+                  {triggers.length ? triggers.join(" · ") : "—"}
+                </span>
               </span>
-              <span className="mr">
-                <span className="mr-k">{t("modes.lang")}</span>
-                {langLabel(m.language)}
+              <span className="vxm-field">
+                <span className="vxm-field-k">{t("modes.lang")}</span>
+                <span className="vxm-field-v">{langLabel(m.language)}</span>
               </span>
               {m.keywords.length ? (
-                <span className="mr">
-                  <span className="mr-k">{t("modes.keywords")}</span>
-                  {m.keywords.join(", ")}
+                <span className="vxm-field">
+                  <span className="vxm-field-k">{t("modes.keywords")}</span>
+                  <span className="vxm-field-v vxm-keywords">{m.keywords.join(", ")}</span>
                 </span>
               ) : null}
             </div>
@@ -216,25 +238,25 @@ function ModeForm({
   }
 
   return (
-    <div className="panel-body modes-new">
-      <div className="nm-head">
-        <span className="nm-title">{isNew ? t("modes.new.title") : t("modes.new.edit")}</span>
-        <button type="button" className="nm-cancel" onClick={onCancel}>
+    <div className="panel-body vxm-form">
+      <div className="vxm-form-head">
+        <span className="vxm-form-title">{isNew ? t("modes.new.title") : t("modes.new.edit")}</span>
+        <button type="button" className="vx-btn" onClick={onCancel}>
           ✕ {t("modes.cancel")}
         </button>
       </div>
-      <div className="nm-field">
-        <label>{t("modes.field.name")}</label>
+      <div className="vxm-field-block">
+        <label className="lbl">{t("modes.field.name")}</label>
         <input
-          className="key-input"
+          className="vxm-input"
           value={m.name}
           placeholder="E.G. EMAIL"
           onChange={(e) => set("name", e.target.value.toUpperCase())}
         />
       </div>
 
-      <div className="nm-field">
-        <label>{t("modes.field.model")}</label>
+      <div className="vxm-field-block">
+        <label className="lbl">{t("modes.field.model")}</label>
         <ModelPicker
           registry={registry}
           providers={providers}
@@ -247,12 +269,12 @@ function ModeForm({
       {selModel ? <ModelInfo model={selModel} /> : null}
 
       {caps.length > 0 ? (
-        <div className="nm-field">
-          <label>{t("modes.field.capabilities")}</label>
-          <div className="cap-toggles">
+        <div className="vxm-field-block">
+          <label className="lbl">{t("modes.field.capabilities")}</label>
+          <div className="vxm-caps">
             {caps.map((c) => (
-              <div key={c.key} className="cap-row">
-                <span className="cap-label">{c.label}</span>
+              <div key={c.key} className="vxm-cap-row">
+                <span className="vxm-cap-label">{c.label}</span>
                 <Toggle
                   on={!!m.capabilities[c.key]}
                   onToggle={() =>
@@ -266,24 +288,24 @@ function ModeForm({
         </div>
       ) : null}
 
-      <div className="nm-grid">
-        <div className="nm-field">
-          <label>
-            {t("modes.field.apps")} <span>{t("modes.field.appsHint")}</span>
+      <div className="vxm-grid">
+        <div className="vxm-field-block">
+          <label className="lbl">
+            {t("modes.field.apps")} <span className="vxm-hint">{t("modes.field.appsHint")}</span>
           </label>
           <input
-            className="key-input"
+            className="vxm-input"
             defaultValue={csv(m.triggerApps)}
             placeholder="Safari, Code"
             onChange={(e) => set("triggerApps", parseCsv(e.target.value))}
           />
         </div>
-        <div className="nm-field">
-          <label>
-            {t("modes.field.sites")} <span>{t("modes.field.sitesHint")}</span>
+        <div className="vxm-field-block">
+          <label className="lbl">
+            {t("modes.field.sites")} <span className="vxm-hint">{t("modes.field.sitesHint")}</span>
           </label>
           <input
-            className="key-input"
+            className="vxm-input"
             defaultValue={csv(m.triggerWebsites)}
             placeholder="chatgpt.com"
             onChange={(e) => set("triggerWebsites", parseCsv(e.target.value))}
@@ -292,9 +314,13 @@ function ModeForm({
       </div>
       {/* Language and keywords only show for models that honor them. */}
       {selModel?.supportsLanguage ? (
-        <div className="nm-field">
-          <label>{t("modes.field.language")}</label>
-          <select className="set-select" value={m.language} onChange={(e) => set("language", e.target.value)}>
+        <div className="vxm-field-block">
+          <label className="lbl">{t("modes.field.language")}</label>
+          <select
+            className="vxm-select"
+            value={m.language}
+            onChange={(e) => set("language", e.target.value)}
+          >
             {LANGUAGES.map((l) => (
               <option key={l.code} value={l.code}>
                 {l.label}
@@ -304,20 +330,21 @@ function ModeForm({
         </div>
       ) : null}
       {selModel?.supportsKeywords ? (
-        <div className="nm-field">
-          <label>
-            {t("modes.field.keywords")} <span>{t("modes.field.keywordsHint")}</span>
+        <div className="vxm-field-block">
+          <label className="lbl">
+            {t("modes.field.keywords")}{" "}
+            <span className="vxm-hint">{t("modes.field.keywordsHint")}</span>
           </label>
           <input
             key={m.model}
-            className="key-input"
+            className="vxm-input"
             defaultValue={csv(m.keywords)}
             placeholder="VOXCTL, Tauri, cpal"
             onChange={(e) => set("keywords", parseCsv(e.target.value))}
           />
         </div>
       ) : null}
-      <button type="button" className="nm-save" onClick={() => onSave(m)}>
+      <button type="button" className="vxm-save" onClick={() => onSave(m)}>
         ✓ {t("modes.save")}
       </button>
     </div>
@@ -329,26 +356,26 @@ function ModeForm({
  *  picks a model. */
 function ModelInfo({ model }: { model: ModelRecord }) {
   return (
-    <div className="model-info">
-      <div className="mi-head">
-        <span className="mi-name">{model.label}</span>
-        <span className="mp-badge">{modelBadge(model)}</span>
-        <span className="mi-cost">{costLabel(model)}</span>
+    <div className="vxm-info">
+      <div className="vxm-info-head">
+        <span className="vxm-info-name">{model.label}</span>
+        <span className="vxm-badge">{modelBadge(model)}</span>
+        <span className="vxm-info-cost">{costLabel(model)}</span>
       </div>
-      {model.description ? <div className="mi-desc">{model.description}</div> : null}
-      <div className="mi-stats">
+      {model.description ? <div className="vxm-info-desc">{model.description}</div> : null}
+      <div className="vxm-info-stats">
         {model.accuracy ? (
           <span>
-            <span className="mi-k">{t("modes.accuracy")}</span> {model.accuracy}
+            <span className="vxm-info-k">{t("modes.accuracy")}</span> {model.accuracy}
           </span>
         ) : null}
         {model.speed ? (
           <span>
-            <span className="mi-k">{t("modes.speed")}</span> {model.speed}
+            <span className="vxm-info-k">{t("modes.speed")}</span> {model.speed}
           </span>
         ) : null}
       </div>
-      {model.useCase ? <div className="mi-use">↳ {model.useCase}</div> : null}
+      {model.useCase ? <div className="vxm-info-use">↳ {model.useCase}</div> : null}
     </div>
   );
 }
@@ -368,23 +395,26 @@ function ModelPicker({
   onSelect: (id: string) => void;
   go: (panel: string) => void;
 }) {
-  if (!registry) return <div className="empty">// REGISTRY UNAVAILABLE</div>;
+  if (!registry) return <div className="vxm-empty">// REGISTRY UNAVAILABLE</div>;
 
   return (
-    <div className="model-picker">
+    <div className="vxm-picker">
       {registry.providers.map((p) => {
         const models = modelsForProvider(registry, p.id);
         if (models.length === 0) return null;
         const validated = providerValidated(providers, p.id);
         return (
-          <div key={p.id} className={"mp-group" + (validated ? "" : " locked")}>
-            <div className="mp-group-head">
-              <span className="mp-prov">
-                <span className={"prov-dot " + (validated ? "on" : "off")} />
+          <div key={p.id} className={"vxm-mp-group" + (validated ? "" : " is-locked")}>
+            <div className="vxm-mp-head">
+              <span className="vxm-mp-prov">
+                <span className={"vxm-prov-dot " + (validated ? "on" : "off")} />
+                <span className="prov" aria-hidden="true">
+                  <ProviderLogo id={p.id} size={13} />
+                </span>
                 {p.label}
               </span>
               {validated ? null : (
-                <button type="button" className="mp-addkey" onClick={() => go("settings")}>
+                <button type="button" className="vxm-mp-addkey" onClick={() => go("settings")}>
                   {t("modes.addKey", { provider: p.label })} →
                 </button>
               )}
@@ -395,18 +425,18 @@ function ModelPicker({
                 <button
                   key={mod.id}
                   type="button"
-                  className={"mp-row" + (isSel ? " sel" : "")}
+                  className={"vxm-mp-row" + (isSel ? " is-sel" : "")}
                   disabled={!validated}
                   onClick={() => onSelect(mod.id)}
                 >
-                  <span className="mp-radio">{isSel ? "●" : "○"}</span>
-                  <span className="mp-main">
-                    <span className="mp-name-row">
-                      <span className="mp-name">{mod.label}</span>
-                      <span className="mp-badge">{modelBadge(mod)}</span>
-                      <span className="mp-cost">{costLabel(mod)}</span>
+                  <span className="vxm-mp-radio">{isSel ? "●" : "○"}</span>
+                  <span className="vxm-mp-main">
+                    <span className="vxm-mp-name-row">
+                      <span className="vxm-mp-name">{mod.label}</span>
+                      <span className="vxm-badge">{modelBadge(mod)}</span>
+                      <span className="vxm-mp-cost">{costLabel(mod)}</span>
                     </span>
-                    {mod.description ? <span className="mp-desc">{mod.description}</span> : null}
+                    {mod.description ? <span className="vxm-mp-desc">{mod.description}</span> : null}
                   </span>
                 </button>
               );
@@ -414,7 +444,7 @@ function ModelPicker({
           </div>
         );
       })}
-      <div className="mp-legend">{t("modes.badgeLegend")}</div>
+      <div className="vxm-mp-legend">{t("modes.badgeLegend")}</div>
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import "../styles/panels/home.css";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { t } from "../i18n";
@@ -11,6 +12,7 @@ import {
 } from "../lib/ipc";
 import type { HistoryItem, Mode } from "../lib/types";
 import { estimateCost, formatCost, modelById, type Registry } from "../lib/registry";
+import { ProviderLogo } from "../components/ProviderLogo";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -43,11 +45,11 @@ function fmtBytes(n: number): string {
 function statusChip(status: string): { label: string; cls: string } | null {
   switch (status) {
     case "transcribing":
-      return { label: "⋯ " + t("history.statusTranscribing"), cls: " busy" };
+      return { label: t("history.statusTranscribing"), cls: "busy" };
     case "failed":
-      return { label: "✕ " + t("history.statusFailed"), cls: " err" };
+      return { label: t("history.statusFailed"), cls: "err" };
     case "needs_transcription":
-      return { label: "⚠ " + t("history.statusNeeds"), cls: " err" };
+      return { label: t("history.statusNeeds"), cls: "err" };
     default:
       return null;
   }
@@ -68,6 +70,122 @@ function previewText(item: HistoryItem): string {
   }
 }
 
+/* ---- inline icons (stroke, currentColor) ---- */
+type IcoProps = { size?: number };
+const Svg = (
+  p: { size: number; fill?: boolean; children: React.ReactNode },
+) => (
+  <svg
+    width={p.size}
+    height={p.size}
+    viewBox="0 0 24 24"
+    fill={p.fill ? "currentColor" : "none"}
+    stroke={p.fill ? "none" : "currentColor"}
+    strokeWidth={1.6}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    {p.children}
+  </svg>
+);
+const IcoSearch = ({ size = 16 }: IcoProps) => (
+  <Svg size={size}>
+    <circle cx="11" cy="11" r="7" />
+    <path d="m21 21-4.3-4.3" />
+  </Svg>
+);
+const IcoClose = ({ size = 14 }: IcoProps) => (
+  <Svg size={size}>
+    <path d="M18 6 6 18M6 6l12 12" />
+  </Svg>
+);
+const IcoCopy = ({ size = 14 }: IcoProps) => (
+  <Svg size={size}>
+    <rect x="9" y="9" width="11" height="11" rx="1" />
+    <path d="M5 15V5a1 1 0 0 1 1-1h10" />
+  </Svg>
+);
+const IcoCheck = ({ size = 14 }: IcoProps) => (
+  <Svg size={size}>
+    <path d="M20 6 9 17l-5-5" />
+  </Svg>
+);
+const IcoPlay = ({ size = 13 }: IcoProps) => (
+  <Svg size={size} fill>
+    <path d="M7 5v14l11-7z" />
+  </Svg>
+);
+const IcoStop = ({ size = 13 }: IcoProps) => (
+  <Svg size={size} fill>
+    <rect x="6" y="6" width="12" height="12" rx="1" />
+  </Svg>
+);
+const IcoRerun = ({ size = 14 }: IcoProps) => (
+  <Svg size={size}>
+    <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+    <path d="M21 3v5h-5" />
+  </Svg>
+);
+const IcoChevDown = ({ size = 12 }: IcoProps) => (
+  <Svg size={size}>
+    <path d="m6 9 6 6 6-6" />
+  </Svg>
+);
+const IcoTrash = ({ size = 14 }: IcoProps) => (
+  <Svg size={size}>
+    <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m2 0v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6" />
+  </Svg>
+);
+const IcoMic = ({ size = 40 }: IcoProps) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.4}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <rect x="9" y="2" width="6" height="12" rx="3" />
+    <path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8" />
+  </svg>
+);
+const IcoAlert = ({ size = 38 }: IcoProps) => (
+  <Svg size={size}>
+    <path d="M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.7 3.86a2 2 0 0 0-3.42 0z" />
+    <path d="M12 9v4M12 17h.01" />
+  </Svg>
+);
+const IcoStar = ({ size = 15, on = false }: IcoProps & { on?: boolean }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill={on ? "currentColor" : "none"}
+    stroke="currentColor"
+    strokeWidth={1.6}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M12 2.5l2.9 6.2 6.6.7-4.9 4.5 1.3 6.6L12 18.2 6.1 21l1.3-6.6L2.5 9.4l6.6-.7z" />
+  </svg>
+);
+
+/** Provider brand chip with mode tooltip (reuses the shared `.prov` class). */
+function ProviderChip({ provider, mode, size = 15 }: { provider?: string; mode?: string; size?: number }) {
+  if (!provider) return null;
+  return (
+    <span className="prov" style={{ width: size + 8, height: size + 8 }}>
+      <ProviderLogo id={provider} size={size} />
+      {mode ? <span className="tip">{mode}</span> : null}
+    </span>
+  );
+}
+
 type ActiveAudio = {
   id: number;
   audio: HTMLAudioElement;
@@ -81,7 +199,7 @@ export function HistoryPanel({
   go,
   stopToken = 0,
 }: {
-  history: HistoryItem[];
+  history: HistoryItem[] | null | undefined;
   modes: Mode[];
   registry: Registry | null;
   onChange: () => void;
@@ -92,6 +210,7 @@ export function HistoryPanel({
   const [copied, setCopied] = useState<number | null>(null);
   const [playing, setPlaying] = useState<number | null>(null);
   const [rerunFor, setRerunFor] = useState<number | null>(null);
+  const [confirmDel, setConfirmDel] = useState<number | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
   // Search / filter
   const [query, setQuery] = useState("");
@@ -101,6 +220,9 @@ export function HistoryPanel({
   // Bulk selection
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  // No error signal exists in props today; default false. RETRY calls onChange().
+  // Surfaced for the verification phase to wire to a real archive-read error.
+  const [archiveError] = useState(false);
   const copyTref = useRef<number | undefined>(undefined);
   const audioRef = useRef<ActiveAudio | null>(null);
   const playSeq = useRef(0);
@@ -122,6 +244,12 @@ export function HistoryPanel({
   useEffect(() => {
     if (stopToken > 0) stopPlayback();
   }, [stopPlayback, stopToken]);
+
+  // Collapsing a card resets its transient per-card UI.
+  useEffect(() => {
+    setRerunFor(null);
+    setConfirmDel(null);
+  }, [expanded]);
 
   async function doCopy(e: React.MouseEvent, item: HistoryItem) {
     e.stopPropagation();
@@ -191,6 +319,7 @@ export function HistoryPanel({
     } catch {
       /* ignore */
     }
+    setConfirmDel(null);
   }
 
   async function doRerun(e: React.MouseEvent, item: HistoryItem, modeId: string) {
@@ -228,16 +357,20 @@ export function HistoryPanel({
     setSelectMode(false);
   }
 
+  // ---- readiness signal: null/undefined history = still loading ----
+  const loading = history == null;
+  const items: HistoryItem[] = history ?? [];
+
   // File-capable modes are the only ones that can re-transcribe a saved file.
   const fileModes = modes.filter((m) => modelById(registry, m.model)?.canFile);
   const modeLabel = (m: Mode) => `${m.name} · ${modelById(registry, m.model)?.label ?? m.model}`;
 
   // Distinct apps/languages present, for the filter dropdowns.
-  const apps = [...new Set(history.map((h) => h.appName || h.website).filter(Boolean))] as string[];
-  const langs = [...new Set(history.map((h) => h.language).filter(Boolean))];
+  const apps = [...new Set(items.map((h) => h.appName || h.website).filter(Boolean))] as string[];
+  const langs = [...new Set(items.map((h) => h.language).filter(Boolean))];
 
   const q = query.trim().toLowerCase();
-  const filtered = history.filter((h) => {
+  const filtered = items.filter((h) => {
     if (favOnly && !h.favorite) return false;
     if (appFilter && (h.appName || h.website || "") !== appFilter) return false;
     if (langFilter && h.language !== langFilter) return false;
@@ -248,13 +381,28 @@ export function HistoryPanel({
     return true;
   });
 
-  if (history.length === 0) {
-    return (
-      <div className="panel-body files">
-        <div className="empty">{t("history.empty")}</div>
-      </div>
-    );
+  // ---- derived stats (top model / spend / minutes) ----
+  let totalSecs = 0;
+  let totalCost = 0;
+  const modelCounts = new Map<string, number>();
+  for (const h of items) {
+    totalSecs += h.durationSecs || 0;
+    totalCost += estimateCost(modelById(registry, h.modelId), h.durationSecs);
+    if (h.modelId) modelCounts.set(h.modelId, (modelCounts.get(h.modelId) ?? 0) + 1);
   }
+  let topModelId: string | null = null;
+  let topCount = 0;
+  for (const [id, c] of modelCounts) {
+    if (c > topCount) {
+      topCount = c;
+      topModelId = id;
+    }
+  }
+  const topModel = topModelId ? modelById(registry, topModelId) : undefined;
+  const topModelLabel = topModel?.label ?? topModelId ?? "";
+  const totalMinutes = Math.round(totalSecs / 60);
+  const totalHours = (totalSecs / 3600).toFixed(1);
+  const spendLabel = totalCost > 0 ? formatCost(totalCost) : "$0.00";
 
   const groups: { day: string; items: HistoryItem[] }[] = [];
   for (const item of filtered) {
@@ -264,18 +412,135 @@ export function HistoryPanel({
     else groups.push({ day, items: [item] });
   }
 
+  // ---- ERROR state (local flag; RETRY → onChange) ----
+  if (archiveError) {
+    return (
+      <div className="panel-body hm">
+        <div className="hm-state">
+          <div className="hm-state-inner">
+            <div className="hm-state-ico err">
+              <IcoAlert size={38} />
+            </div>
+            <div className="hm-state-title sm">ARCHIVE UNREACHABLE</div>
+            <p className="hm-state-body">
+              VOXCTL could not read the local transmission log. The store may be locked by another
+              process.
+            </p>
+            <button type="button" className="vx-btn vx-btn--mag" onClick={() => onChange()}>
+              <IcoRerun size={14} />
+              RETRY
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ---- LOADING skeleton ----
+  if (loading) {
+    return (
+      <div className="panel-body hm">
+        <div className="hm-skel-day">
+          <span className="skel" style={{ height: 12, width: 90 }} />
+          <span className="hm-skel-line" />
+        </div>
+        {[0, 1, 2].map((i) => (
+          <div className="hm-skel-card" key={i}>
+            <span className="skel" style={{ height: 14, width: 60 }} />
+            <div className="hm-skel-lines">
+              <span className="skel" style={{ height: 12, width: "92%" }} />
+              <span className="skel" style={{ height: 12, width: "78%" }} />
+              <span className="skel" style={{ height: 12, width: "40%" }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // ---- EMPTY-ALL state (loaded, nothing archived) ----
+  if (items.length === 0) {
+    return (
+      <div className="panel-body hm">
+        <div className="hm-state">
+          <div className="hm-state-inner">
+            <div className="hm-state-ico">
+              <IcoMic size={40} />
+            </div>
+            <div className="hm-state-title">TAKE CONTROL OF YOUR VOICE</div>
+            <p className="hm-state-body">
+              No transmissions leave your machine. Hold the capture shortcut and speak — your first
+              transcription appears here.
+            </p>
+            <div className="hm-callout">
+              <span className="hm-callout-lbl">HOLD</span>
+              <span className="hm-kbd">OPTION</span>
+              <span className="hm-callout-plus">+</span>
+              <span className="hm-kbd">SPACE</span>
+              <span className="hm-callout-lbl mag">TO RECORD</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="panel-body files">
-      <div className="files-toolbar">
-        <input
-          className="files-search"
-          value={query}
-          placeholder={t("history.search")}
-          spellCheck={false}
-          onChange={(e) => setQuery(e.target.value)}
-        />
+    <div className="panel-body hm">
+      {/* stats strip */}
+      <div className="hm-stats">
+        <div className="hm-stat">
+          <span className="hm-stat-k">TOP MODEL</span>
+          {topModelLabel ? (
+            <span className="hm-stat-model">
+              <ProviderChip provider={topModel?.provider} mode={topModelLabel} size={15} />
+              <span className="hm-stat-v sm">{topModelLabel}</span>
+            </span>
+          ) : (
+            <span className="hm-stat-v sm">—</span>
+          )}
+        </div>
+        <div className="hm-stat">
+          <span className="hm-stat-k">TOTAL SPEND</span>
+          <span className="hm-stat-row">
+            <span className="hm-stat-v mag">{spendLabel}</span>
+            <span className="hm-stat-sub">LOCAL EST</span>
+          </span>
+        </div>
+        <div className="hm-stat">
+          <span className="hm-stat-k">MINUTES CAPTURED</span>
+          <span className="hm-stat-row">
+            <span className="hm-stat-v">{totalMinutes}</span>
+            <span className="hm-stat-sub">≈ {totalHours} HRS</span>
+          </span>
+        </div>
+      </div>
+
+      {/* toolbar: search + filters + bulk-select */}
+      <div className="hm-toolbar">
+        <div className="hm-search">
+          <span className="hm-search-ico">
+            <IcoSearch size={17} />
+          </span>
+          <input
+            value={query}
+            placeholder={t("history.search")}
+            spellCheck={false}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {query ? (
+            <button
+              type="button"
+              className="vx-ico hm-search-clear"
+              title="Clear"
+              onClick={() => setQuery("")}
+            >
+              <IcoClose size={15} />
+            </button>
+          ) : null}
+        </div>
         {apps.length > 0 ? (
-          <select className="files-filter" value={appFilter} onChange={(e) => setAppFilter(e.target.value)}>
+          <select className="hm-select" value={appFilter} onChange={(e) => setAppFilter(e.target.value)}>
             <option value="">{t("history.filterApp")}</option>
             {apps.map((a) => (
               <option key={a} value={a}>
@@ -285,7 +550,7 @@ export function HistoryPanel({
           </select>
         ) : null}
         {langs.length > 1 ? (
-          <select className="files-filter" value={langFilter} onChange={(e) => setLangFilter(e.target.value)}>
+          <select className="hm-select" value={langFilter} onChange={(e) => setLangFilter(e.target.value)}>
             <option value="">{t("history.filterLang")}</option>
             {langs.map((l) => (
               <option key={l} value={l}>
@@ -296,14 +561,15 @@ export function HistoryPanel({
         ) : null}
         <button
           type="button"
-          className={"files-chip" + (favOnly ? " on" : "")}
+          className={"vx-btn" + (favOnly ? " vx-btn--mag" : "")}
           onClick={() => setFavOnly((v) => !v)}
         >
-          ★ {t("history.filterFav")}
+          <IcoStar size={13} on={favOnly} />
+          {t("history.filterFav")}
         </button>
         <button
           type="button"
-          className={"files-chip" + (selectMode ? " on" : "")}
+          className={"vx-btn" + (selectMode ? " vx-btn--mag" : "")}
           onClick={() => {
             setSelectMode((v) => !v);
             setSelected(new Set());
@@ -314,134 +580,302 @@ export function HistoryPanel({
       </div>
 
       {selectMode ? (
-        <div className="files-selbar">
+        <div className="hm-selbar">
           <span>{t("history.selectedCount", { n: selected.size })}</span>
-          <button type="button" className="fa danger" disabled={selected.size === 0} onClick={deleteSelected}>
-            ✕ {t("history.deleteSelected")}
+          <button
+            type="button"
+            className="vx-btn vx-btn--danger"
+            disabled={selected.size === 0}
+            onClick={deleteSelected}
+          >
+            <IcoTrash size={14} />
+            {t("history.deleteSelected")}
           </button>
         </div>
       ) : null}
 
       {groups.length === 0 ? (
-        <div className="empty">{t("history.noMatches")}</div>
+        // ---- EMPTY-SEARCH state (filters exclude everything) ----
+        <div className="hm-state">
+          <div className="hm-state-inner">
+            <div className="hm-state-ico dim">
+              <IcoSearch size={34} />
+            </div>
+            <div className="hm-state-sub">NO TRANSCRIPTS MATCH</div>
+            <p className="hm-state-body">
+              Nothing found{q ? <> for “<span className="mag">{query.trim()}</span>”</> : null}. Try a
+              different term or clear the filters.
+            </p>
+          </div>
+        </div>
       ) : (
         groups.map((g) => (
-          <div className="file-group" key={g.day}>
-            <div className="file-group-head">{g.day}</div>
-            {g.items.map((item) => {
-              const exp = expanded === item.id;
-              const cp = copied === item.id;
-              const ctx = item.appName || item.website;
-              const sc = statusChip(item.status);
-              const sel = selected.has(item.id);
-              const size = fmtBytes(item.audioBytes);
-              const costVal = estimateCost(modelById(registry, item.modelId), item.durationSecs);
-              const cost = costVal > 0 ? formatCost(costVal) : "";
-              return (
-                <div
-                  key={item.id}
-                  className={"file-card" + (exp ? " expanded" : "") + (sel ? " selected" : "")}
-                  onClick={() => (selectMode ? toggleSelect(item.id) : setExpanded(exp ? null : item.id))}
-                >
-                  <div className="file-head">
-                    <div className="file-head-left">
-                      {selectMode ? <span className="file-check">{sel ? "☑" : "☐"}</span> : null}
-                      <span className="file-time">{timeLabel(item.createdAt)}</span>
-                      {item.favorite ? <span className="mode-badge">★</span> : null}
-                    </div>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      {sc ? <span className={"file-chip" + sc.cls}>{sc.label}</span> : null}
-                      {item.modeName && item.modeName !== "—" ? (
-                        <span className="file-chip mode">▸ {item.modeName.toUpperCase()}</span>
-                      ) : null}
-                      {ctx ? <span className="file-chip ctx">{ctx.toUpperCase()}</span> : null}
-                      <span className="file-chip">{langLabel(item.language)}</span>
-                    </div>
-                  </div>
-                  <p className={"file-preview" + (item.transcript?.trim() ? "" : " placeholder")}>
-                    {previewText(item)}
-                  </p>
-                  {selectMode ? null : (
-                    <div className="file-foot">
-                      <div className="file-actions">
-                        <button type="button" className={"fa" + (cp ? " copied" : "")} onClick={(e) => doCopy(e, item)}>
-                          {cp ? "✓ " + t("history.copied") : "⧉ " + t("history.copy")}
-                          {item.copyCount > 0 ? <span className="count">{fmtCount(item.copyCount)}</span> : null}
-                        </button>
-                        <button type="button" className="fa" onClick={(e) => doPlay(e, item)}>
-                          {playing === item.id ? "■ " + t("history.stop") : "▶ " + t("history.play")}
-                        </button>
-                        <button
-                          type="button"
-                          className={"fa" + (item.favorite ? " fav" : "")}
-                          onClick={(e) => doFavorite(e, item)}
-                        >
-                          {item.favorite ? "★" : "☆"} {t("history.favorite")}
-                        </button>
-                        {rerunFor === item.id ? (
-                          fileModes.length > 0 ? (
-                            <select
-                              className="set-select"
-                              style={{ width: "auto", padding: "4px 8px" }}
-                              title={t("history.rerunHeadline")}
-                              autoFocus
-                              onClick={(e) => e.stopPropagation()}
-                              onChange={(e) => doRerun(e as unknown as React.MouseEvent, item, e.target.value)}
-                              defaultValue=""
-                            >
-                              <option value="" disabled>
-                                {t("history.rerunPick")}
-                              </option>
-                              {fileModes.map((m) => (
-                                <option key={m.id} value={m.id}>
-                                  {modeLabel(m)}
-                                </option>
-                              ))}
-                            </select>
+          <div className="hm-group" key={g.day}>
+            <div className="hm-day">
+              <span className="hm-day-label">{g.day}</span>
+              <span className="hm-day-line" />
+            </div>
+            <div className="hm-list">
+              {g.items.map((item) => {
+                const exp = expanded === item.id;
+                const dim = expanded !== null && !exp;
+                const cp = copied === item.id;
+                const ctx = item.appName || item.website;
+                const sc = statusChip(item.status);
+                const sel = selected.has(item.id);
+                const size = fmtBytes(item.audioBytes);
+                const provider = modelById(registry, item.modelId)?.provider;
+                const costVal = estimateCost(modelById(registry, item.modelId), item.durationSecs);
+                const cost = costVal > 0 ? formatCost(costVal) : "";
+                const hasText = !!item.transcript?.trim();
+                return (
+                  <div
+                    key={item.id}
+                    className={"tcard" + (exp ? " tcard--open" : dim ? " tcard--dim" : "")}
+                  >
+                    {/* collapsed header — click toggles (or selects in bulk mode) */}
+                    <div
+                      className="hm-card-head"
+                      onClick={() =>
+                        selectMode ? toggleSelect(item.id) : setExpanded(exp ? null : item.id)
+                      }
+                    >
+                      {selectMode ? (
+                        <span className="hm-chk">
+                          {sel ? (
+                            <IcoCheck size={16} />
                           ) : (
+                            <span
+                              style={{ width: 14, height: 14, border: "1px solid var(--ink-3)" }}
+                            />
+                          )}
+                        </span>
+                      ) : null}
+                      <span className="hm-time">{timeLabel(item.createdAt)}</span>
+                      <div className="hm-preview-wrap">
+                        {exp ? null : (
+                          <p className={"hm-preview" + (hasText ? "" : " placeholder")}>
+                            {previewText(item)}
+                          </p>
+                        )}
+                      </div>
+                      <div className="hm-head-right">
+                        {item.favorite ? (
+                          <span className="hm-fav on" aria-label="favorite">
+                            <IcoStar size={15} on />
+                          </span>
+                        ) : null}
+                        {sc ? <span className={"hm-status " + sc.cls}>{sc.label}</span> : null}
+                        {ctx ? <span className="hm-ctx">{ctx.toUpperCase()}</span> : null}
+                        {!exp && !selectMode ? (
+                          <div
+                            className="hovctl"
+                            style={{ display: "flex", alignItems: "center", gap: 12 }}
+                            onClick={(e) => e.stopPropagation()}
+                          >
                             <button
                               type="button"
-                              className="fa"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setRerunFor(null);
-                                go("modes");
-                              }}
+                              className="vx-ico"
+                              title={t("history.copy")}
+                              disabled={!hasText}
+                              onClick={(e) => doCopy(e, item)}
                             >
-                              ＋ {t("history.rerunCreate")}
+                              {cp ? (
+                                <span style={{ color: "var(--mag)" }}>
+                                  <IcoCheck size={15} />
+                                </span>
+                              ) : (
+                                <IcoCopy size={15} />
+                              )}
                             </button>
-                          )
-                        ) : (
-                          <button
-                            type="button"
-                            className="fa"
-                            disabled={busy === item.id}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setRerunFor(item.id);
-                            }}
-                          >
-                            {busy === item.id ? "↻ …" : "↻ " + t("history.retranscribe")}
-                          </button>
-                        )}
-                        <button type="button" className="fa danger" onClick={(e) => doDelete(e, item)}>
-                          ✕
-                        </button>
-                      </div>
-                      <div className="file-meta2">
-                        <span>{durLabel(item.durationSecs)}</span>
-                        <span>
-                          {item.words} {t("history.words")}
-                        </span>
-                        {size ? <span>{size}</span> : null}
-                        {cost ? <span className="file-cost">{cost}</span> : null}
-                        <span className="file-exp">⌄</span>
+                            <ProviderChip provider={provider} mode={item.modeName} size={15} />
+                          </div>
+                        ) : null}
                       </div>
                     </div>
-                  )}
-                </div>
-              );
-            })}
+
+                    {/* expanded body */}
+                    {exp && !selectMode ? (
+                      <div className="hm-body">
+                        <div className={"hm-text" + (hasText ? "" : " placeholder")}>
+                          {previewText(item)}
+                        </div>
+
+                        {/* play control */}
+                        <div className="hm-play-row">
+                          <button
+                            type="button"
+                            className="vx-btn vx-btn--mag"
+                            style={{ minWidth: 96, justifyContent: "center" }}
+                            onClick={(e) => doPlay(e, item)}
+                          >
+                            {playing === item.id ? <IcoStop size={13} /> : <IcoPlay size={13} />}
+                            {playing === item.id ? t("history.stop") : t("history.play")}
+                          </button>
+                          <span className="hm-play-read">{durLabel(item.durationSecs)}</span>
+                        </div>
+
+                        {/* action row */}
+                        <div className="hm-actions">
+                          <button
+                            type="button"
+                            className={"vx-btn" + (cp ? " vx-btn--mag" : "")}
+                            disabled={!hasText}
+                            onClick={(e) => doCopy(e, item)}
+                          >
+                            {cp ? <IcoCheck size={14} /> : <IcoCopy size={14} />}
+                            {cp ? t("history.copied") : t("history.copy")}
+                            {item.copyCount > 0 ? (
+                              <span style={{ color: "var(--ink-3)" }}>{fmtCount(item.copyCount)}</span>
+                            ) : null}
+                          </button>
+
+                          <button
+                            type="button"
+                            className={"vx-btn" + (item.favorite ? " vx-btn--mag" : "")}
+                            onClick={(e) => doFavorite(e, item)}
+                          >
+                            <IcoStar size={14} on={item.favorite} />
+                            {t("history.favorite")}
+                          </button>
+
+                          {/* re-transcribe (file-capable modes only) */}
+                          <div className="hm-menu-wrap">
+                            <button
+                              type="button"
+                              className="vx-btn"
+                              disabled={busy === item.id}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setRerunFor(rerunFor === item.id ? null : item.id);
+                              }}
+                            >
+                              <IcoRerun size={14} />
+                              {busy === item.id ? "…" : t("history.retranscribe")}
+                              <span style={{ color: "var(--ink-3)" }}>
+                                <IcoChevDown size={12} />
+                              </span>
+                            </button>
+                            {rerunFor === item.id ? (
+                              <div className="hm-menu" onClick={(e) => e.stopPropagation()}>
+                                {fileModes.length > 0 ? (
+                                  <>
+                                    <div className="hm-menu-head">RE-RUN THROUGH MODE</div>
+                                    {fileModes.map((m) => {
+                                      const mp = modelById(registry, m.model)?.provider;
+                                      return (
+                                        <button
+                                          key={m.id}
+                                          type="button"
+                                          className="hm-menu-item"
+                                          title={t("history.rerunHeadline")}
+                                          onClick={(e) => doRerun(e, item, m.id)}
+                                        >
+                                          {mp ? (
+                                            <span className="hm-menu-logo">
+                                              <ProviderLogo id={mp} size={13} />
+                                            </span>
+                                          ) : null}
+                                          {modeLabel(m)}
+                                        </button>
+                                      );
+                                    })}
+                                  </>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="hm-menu-item"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setRerunFor(null);
+                                      go("modes");
+                                    }}
+                                  >
+                                    ＋ {t("history.rerunCreate")}
+                                  </button>
+                                )}
+                              </div>
+                            ) : null}
+                          </div>
+
+                          {/* delete — two-step confirm */}
+                          <div className="hm-actions-end">
+                            {confirmDel === item.id ? (
+                              <div className="hm-del" onClick={(e) => e.stopPropagation()}>
+                                <span className="hm-del-q">{t("modes.delete")} ?</span>
+                                <button
+                                  type="button"
+                                  className="vx-btn"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setConfirmDel(null);
+                                  }}
+                                >
+                                  {t("modes.cancel")}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="vx-btn hm-del-go"
+                                  onClick={(e) => doDelete(e, item)}
+                                >
+                                  {t("modes.delete")}
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                className="vx-btn vx-btn--danger"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setConfirmDel(item.id);
+                                }}
+                              >
+                                <IcoTrash size={14} />
+                                {t("modes.delete")}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* metadata row */}
+                        <div className="hm-meta">
+                          {provider ? (
+                            <span className="hm-meta-prov">
+                              <ProviderChip provider={provider} mode={item.modeName} size={15} />
+                              <span className="hm-meta-k">{provider.toUpperCase()}</span>
+                            </span>
+                          ) : null}
+                          <span className="hm-meta-cell">
+                            <span className="hm-meta-k">DUR</span>
+                            <span className="hm-meta-v">{durLabel(item.durationSecs)}</span>
+                          </span>
+                          <span className="hm-meta-cell">
+                            <span className="hm-meta-k">{t("history.words")}</span>
+                            <span className="hm-meta-v">{item.words}</span>
+                          </span>
+                          {size ? (
+                            <span className="hm-meta-cell">
+                              <span className="hm-meta-k">SIZE</span>
+                              <span className="hm-meta-v">{size}</span>
+                            </span>
+                          ) : null}
+                          <span className="hm-meta-cell">
+                            <span className="hm-meta-k">{t("modes.lang")}</span>
+                            <span className="hm-meta-v">{langLabel(item.language)}</span>
+                          </span>
+                          {cost ? (
+                            <span className="hm-meta-cell">
+                              <span className="hm-meta-k">COST</span>
+                              <span className="hm-meta-v mag">{cost}</span>
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         ))
       )}

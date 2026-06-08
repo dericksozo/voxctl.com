@@ -1,0 +1,303 @@
+/* Onboarding — 3 required-step stepper (mic · accessibility · API key).
+ * Restyled to the v3 prototype's onboarding visual language: centered panel
+ * with corner brackets, real VOXCTL logo header, status pills, and an
+ * n/3 progress bar. All tokens/shared classes (.vx-btn, .lbl, .prov) come
+ * from theme.css; everything here is namespaced under .onb-root. */
+
+.onb-root {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8px 10px 48px;
+}
+
+.onb-panel {
+  position: relative;
+  width: 100%;
+  max-width: 760px;
+  padding: 40px 44px;
+}
+
+/* corner brackets */
+.onb-corner {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--ink);
+  pointer-events: none;
+}
+.onb-corner.tl {
+  top: 0;
+  left: 0;
+  border-right: none;
+  border-bottom: none;
+}
+.onb-corner.tr {
+  top: 0;
+  right: 0;
+  border-left: none;
+  border-bottom: none;
+}
+.onb-corner.bl {
+  bottom: 0;
+  left: 0;
+  border-right: none;
+  border-top: none;
+}
+.onb-corner.br {
+  bottom: 0;
+  right: 0;
+  border-left: none;
+  border-top: none;
+}
+
+/* header */
+.onb-header {
+  text-align: center;
+  margin-bottom: 30px;
+}
+.onb-brand {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+  color: var(--ink);
+}
+.onb-brand .logo-mark {
+  width: 42px;
+  height: 42px;
+}
+.onb-wordmark {
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: 36px;
+  line-height: 1;
+  color: var(--mag);
+  letter-spacing: 0.02em;
+}
+.onb-note {
+  display: inline-block;
+  font-size: 11.5px;
+  letter-spacing: 0.2em;
+  color: var(--ink-3);
+  border: 1px solid var(--line);
+  padding: 4px 12px;
+  margin-bottom: 18px;
+  white-space: nowrap;
+}
+.onb-title {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 24px;
+  color: var(--ink);
+  letter-spacing: 0.04em;
+  margin-bottom: 10px;
+}
+.onb-sub {
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  color: var(--ink-2);
+  margin: 0;
+}
+
+/* steps */
+.onb-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.onb-step {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: 18px 20px;
+  transition: border-color 0.15s, background 0.15s, opacity 0.15s;
+}
+.onb-step.is-done {
+  border-color: var(--line-soft);
+  background: rgba(0, 179, 104, 0.035);
+  opacity: 0.94;
+}
+.onb-step.is-error {
+  border-color: var(--err);
+  background: rgba(255, 45, 45, 0.04);
+}
+.onb-step-main {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.onb-step-n {
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: var(--ink-3);
+  width: 46px;
+  flex-shrink: 0;
+}
+.onb-step.is-active .onb-step-n {
+  color: var(--mag);
+}
+.onb-step-ico {
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  flex-shrink: 0;
+}
+.onb-step.is-active .onb-step-ico {
+  border-color: var(--mag-line);
+  color: var(--mag);
+  background: var(--mag-soft);
+}
+.onb-step-body {
+  flex: 1;
+  min-width: 0;
+}
+.onb-step-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+.onb-step-desc {
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+  line-height: 1.5;
+}
+.onb-step-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+/* status pill */
+.onb-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+}
+.onb-pill.waiting {
+  color: var(--ink-3);
+}
+.onb-pill.progress {
+  color: var(--warn);
+}
+.onb-pill.done {
+  color: var(--ok);
+}
+.onb-pill.error {
+  color: var(--err);
+}
+.onb-pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--ink-3);
+}
+.onb-spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border: 1.5px solid var(--warn);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: onbspin 0.7s linear infinite;
+}
+@keyframes onbspin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .onb-spinner {
+    animation: none;
+  }
+}
+
+/* expanded region (API-key provider cards / validated summary) */
+.onb-step-expand {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line-soft);
+}
+.onb-expand-label {
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  color: var(--ink-3);
+  margin-bottom: 12px;
+}
+.onb-key-summary {
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  color: var(--ink-2);
+}
+.onb-key-summary b {
+  color: var(--ink);
+}
+.onb-key-summary .mag {
+  color: var(--mag);
+}
+
+/* footer / progress */
+.onb-footer {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line-soft);
+}
+.onb-progress {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.onb-progress-txt {
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.onb-progress-bar {
+  flex: 1;
+  max-width: 220px;
+  height: 5px;
+  background: var(--line-faint);
+  position: relative;
+}
+.onb-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--mag);
+  transition: width 0.3s;
+}
+.onb-enter {
+  padding: 12px 26px;
+  font-size: 14px;
+}
+.onb-enter.ready {
+  background: var(--mag);
+  color: #fff;
+  border-color: var(--mag);
+}
+.onb-enter.ready:hover {
+  background: var(--mag-ink);
+  border-color: var(--mag-ink);
+}
+
+.onb-error {
+  margin-top: 16px;
+  color: var(--err);
+  font-size: 12.5px;
+  letter-spacing: 0.06em;
+}
