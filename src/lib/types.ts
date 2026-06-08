@@ -91,6 +91,8 @@ export interface HistoryItem {
   modelId: string;
   /** Size of the saved WAV on disk, in bytes (0 if the file is gone). */
   audioBytes: number;
+  /** Wall-clock from recording-stop to final transcript, in ms (0 if unknown). */
+  transcriptionMs: number;
 }
 
 /** Disk usage of the recordings directory (Storage section). */

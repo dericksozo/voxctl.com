@@ -43,6 +43,8 @@ pub async fn retranscribe(app: AppHandle, id: i64, mode_id: String) -> Result<St
     let _ = app.emit(events::HISTORY_CHANGED, ());
 
     let wav = std::fs::read(&item.audio_path).map_err(|e| format!("read audio: {e}"))?;
+    // Time the re-run the same way the live pipeline does: from request to result.
+    let started = std::time::Instant::now();
     let text = match transcriber.transcribe_file(&wav, &options).await {
         Ok(t) => t,
         Err(e) => {
@@ -54,7 +56,14 @@ pub async fn retranscribe(app: AppHandle, id: i64, mode_id: String) -> Result<St
     };
 
     let resolved = crate::lang_detect::resolve(lang.as_deref(), &text);
-    history::update_result(&app.state::<HistoryDb>(), id, &text, &resolved, "done");
+    history::update_result(
+        &app.state::<HistoryDb>(),
+        id,
+        &text,
+        &resolved,
+        "done",
+        started.elapsed().as_millis() as i64,
+    );
     history::set_model_id(&app.state::<HistoryDb>(), id, &mode.model);
     let _ = app.emit(events::HISTORY_CHANGED, ());
     Ok(text)

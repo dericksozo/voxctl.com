@@ -83,6 +83,7 @@ async fn retry_failed(app: &AppHandle) {
         let Some(transcriber) = file_transcribe::file_transcriber_for(model, key) else {
             continue;
         };
+        let started = std::time::Instant::now();
         match transcriber.transcribe_file(&wav, &opts).await {
             Ok(text) if !text.trim().is_empty() => {
                 let language = crate::lang_detect::resolve(opts.language.as_deref(), &text);
@@ -92,6 +93,7 @@ async fn retry_failed(app: &AppHandle) {
                     &text,
                     &language,
                     "done",
+                    started.elapsed().as_millis() as i64,
                 );
                 clear(app, item.id);
                 let _ = app.emit(events::HISTORY_CHANGED, ());
@@ -104,6 +106,7 @@ async fn retry_failed(app: &AppHandle) {
                     "",
                     &item.language,
                     "done",
+                    started.elapsed().as_millis() as i64,
                 );
                 clear(app, item.id);
                 let _ = app.emit(events::HISTORY_CHANGED, ());

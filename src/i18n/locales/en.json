@@ -72,7 +72,7 @@
   "history.play": "PLAY",
   "history.stop": "STOP",
   "history.retranscribe": "RE-RUN",
-  "history.words": "WORDS",
+  "history.took": "TOOK",
   "history.statusTranscribing": "TRANSCRIBING",
   "history.statusFailed": "FAILED",
   "history.statusNeeds": "NEEDS TRANSCRIPTION",
