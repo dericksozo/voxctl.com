@@ -50,6 +50,8 @@ export const deleteMode = (id: string) => invoke<void>("delete_mode", { id });
 export const setModeEnabled = (id: string, enabled: boolean) =>
   invoke<void>("set_mode_enabled", { id, enabled });
 export const getActiveMode = () => invoke<ActiveMode | null>("get_active_mode");
+/** Id of the non-deletable default mode (falls back to the first mode). */
+export const getDefaultModeId = () => invoke<string | null>("get_default_mode_id");
 /** Manually pin a mode (sticky across app switches until unpinned). */
 export const pinMode = (id: string) => invoke<void>("pin_mode", { id });
 export const unpinMode = () => invoke<void>("unpin_mode");

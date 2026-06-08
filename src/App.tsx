@@ -17,6 +17,7 @@ import { t } from "./i18n";
 import { EVT, type BackendError, type ModeChanged, type RecState } from "./lib/events";
 import {
   getActiveMode,
+  getDefaultModeId,
   getPermissions,
   getRegistry,
   listHistory,
@@ -51,6 +52,7 @@ export default function App() {
   const [audioStopToken, setAudioStopToken] = useState(0);
 
   const [modes, setModes] = useState<Mode[]>([]);
+  const [defaultModeId, setDefaultModeId] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [activeMode, setActiveMode] = useState<ActiveMode | null>(null);
   const [registry, setRegistry] = useState<Registry | null>(null);
@@ -68,6 +70,7 @@ export default function App() {
   const refreshModes = useCallback(() => {
     listModes().then(setModes).catch(() => {});
     getActiveMode().then(setActiveMode).catch(() => {});
+    getDefaultModeId().then(setDefaultModeId).catch(() => {});
   }, []);
   const refreshHistory = useCallback(() => {
     listHistory().then(setHistory).catch(() => {});
@@ -231,6 +234,7 @@ export default function App() {
           <ModesPanel
             modes={modes}
             activeModeId={activeMode?.mode.id ?? null}
+            defaultModeId={defaultModeId}
             registry={registry}
             providers={providers}
             onChange={refreshModes}
