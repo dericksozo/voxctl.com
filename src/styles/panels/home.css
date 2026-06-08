@@ -237,6 +237,61 @@
   color: var(--ink-3);
   font-style: italic;
 }
+
+/* ---- transcript tabs (plain text / timestamps / speakers) ---- */
+.hm-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+/* TIMESTAMPS — a flowing list of [time] word chips. */
+.hm-stamps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-bottom: 20px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.hm-stamp {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.hm-stamp-t {
+  font-size: 10px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.hm-stamp-w {
+  font-size: 13px;
+  color: var(--ink);
+}
+/* SPEAKERS — one labelled block per turn. */
+.hm-speakers {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 20px;
+  max-width: 64ch;
+}
+.hm-spk {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.hm-spk-k {
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  color: var(--mag);
+}
+.hm-spk-t {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
 .hm-play-row {
   display: flex;
   align-items: center;

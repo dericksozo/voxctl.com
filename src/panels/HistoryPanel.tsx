@@ -31,6 +31,24 @@ const timeLabel = (ts: number) => {
 const durLabel = (s: number) => `${Math.floor(s / 60)}:${pad(Math.round(s % 60))}`;
 /** How long the transcription took (ms → "x.xs"), or "" when not measured. */
 const tookLabel = (ms: number) => (ms > 0 ? `${(ms / 1000).toFixed(1)}s` : "");
+/** A word/segment start time as mm:ss.s. */
+const tcLabel = (s: number) => `${pad(Math.floor(s / 60))}:${(s % 60).toFixed(1).padStart(4, "0")}`;
+/** Human speaker label: numeric ids become "SPEAKER n", others pass through. */
+const speakerLabel = (s: string) => (/^\d+$/.test(s) ? `SPEAKER ${s}` : s.toUpperCase());
+
+/** Which expanded-card tab is shown. */
+type TabKey = "text" | "stamps" | "speakers";
+
+/** The active tab's content formatted for the clipboard. */
+function copyTextFor(item: HistoryItem, tab: TabKey): string {
+  if (tab === "stamps") {
+    return item.wordStamps.map((w) => `[${tcLabel(w.start)}] ${w.word}`).join("\n");
+  }
+  if (tab === "speakers") {
+    return item.speakers.map((s) => `${speakerLabel(s.speaker)}: ${s.text}`).join("\n\n");
+  }
+  return item.transcript;
+}
 const fmtCount = (n: number) => (n >= 10 ? "10+" : String(n));
 
 function fmtBytes(n: number): string {
@@ -191,6 +209,7 @@ export function HistoryPanel({
   stopToken?: number;
 }) {
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [tab, setTab] = useState<TabKey>("text");
   const [copied, setCopied] = useState<number | null>(null);
   const [playing, setPlaying] = useState<number | null>(null);
   const [rerunFor, setRerunFor] = useState<number | null>(null);
@@ -230,16 +249,17 @@ export function HistoryPanel({
   // A new search starts the window over from the first page.
   useEffect(() => setVisibleCount(PAGE_SIZE), [query]);
 
-  // Collapsing a card resets its transient per-card UI.
+  // Collapsing a card resets its transient per-card UI (incl. the active tab).
   useEffect(() => {
     setRerunFor(null);
     setConfirmDel(null);
+    setTab("text");
   }, [expanded]);
 
-  async function doCopy(e: React.MouseEvent, item: HistoryItem) {
+  async function doCopy(e: React.MouseEvent, item: HistoryItem, text?: string) {
     e.stopPropagation();
     try {
-      await navigator.clipboard.writeText(item.transcript);
+      await navigator.clipboard.writeText(text ?? item.transcript);
     } catch {
       /* ignore */
     }
@@ -544,6 +564,13 @@ export function HistoryPanel({
                 const costVal = estimateCost(modelById(registry, item.modelId), item.durationSecs);
                 const cost = costVal > 0 ? formatCost(costVal) : "";
                 const hasText = !!item.transcript?.trim();
+                // Structured-data tabs appear only when the provider returned them.
+                const tabs: { key: TabKey; label: string }[] = [
+                  { key: "text", label: t("history.tabText") },
+                ];
+                if (item.wordStamps?.length) tabs.push({ key: "stamps", label: t("history.tabStamps") });
+                if (item.speakers?.length) tabs.push({ key: "speakers", label: t("history.tabSpeakers") });
+                const effTab: TabKey = tabs.some((x) => x.key === tab) ? tab : "text";
                 return (
                   <div
                     key={item.id}
@@ -595,9 +622,47 @@ export function HistoryPanel({
                     {/* expanded body */}
                     {exp ? (
                       <div className="hm-body">
-                        <div className={"hm-text" + (hasText ? "" : " placeholder")}>
-                          {previewText(item)}
-                        </div>
+                        {tabs.length > 1 ? (
+                          <div className="hm-tabs">
+                            {tabs.map((tb) => (
+                              <button
+                                key={tb.key}
+                                type="button"
+                                className={"vx-tab" + (effTab === tb.key ? " vx-tab--on" : "")}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setTab(tb.key);
+                                }}
+                              >
+                                {tb.label}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+
+                        {effTab === "stamps" ? (
+                          <div className="hm-stamps">
+                            {item.wordStamps.map((w, i) => (
+                              <span key={`${i}-${w.start}`} className="hm-stamp">
+                                <span className="hm-stamp-t">{tcLabel(w.start)}</span>
+                                <span className="hm-stamp-w">{w.word}</span>
+                              </span>
+                            ))}
+                          </div>
+                        ) : effTab === "speakers" ? (
+                          <div className="hm-speakers">
+                            {item.speakers.map((s, i) => (
+                              <div key={`${i}-${s.start}`} className="hm-spk">
+                                <span className="hm-spk-k">{speakerLabel(s.speaker)}</span>
+                                <span className="hm-spk-t">{s.text}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className={"hm-text" + (hasText ? "" : " placeholder")}>
+                            {previewText(item)}
+                          </div>
+                        )}
 
                         {/* play control */}
                         <div className="hm-play-row">
@@ -613,13 +678,13 @@ export function HistoryPanel({
                           <span className="hm-play-read">{durLabel(item.durationSecs)}</span>
                         </div>
 
-                        {/* action row */}
+                        {/* action row — copy follows the active tab */}
                         <div className="hm-actions">
                           <button
                             type="button"
                             className={"vx-btn" + (cp ? " vx-btn--mag" : "")}
                             disabled={!hasText}
-                            onClick={(e) => doCopy(e, item)}
+                            onClick={(e) => doCopy(e, item, copyTextFor(item, effTab))}
                           >
                             {cp ? <IcoCheck size={14} /> : <IcoCopy size={14} />}
                             {cp ? t("history.copied") : t("history.copy")}

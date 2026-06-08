@@ -85,15 +85,16 @@ async fn retry_failed(app: &AppHandle) {
         };
         let started = std::time::Instant::now();
         match transcriber.transcribe_file(&wav, &opts).await {
-            Ok(text) if !text.trim().is_empty() => {
-                let language = crate::lang_detect::resolve(opts.language.as_deref(), &text);
+            Ok(out) if !out.text.trim().is_empty() => {
+                let language = crate::lang_detect::resolve(opts.language.as_deref(), &out.text);
                 history::update_result(
                     &app.state::<HistoryDb>(),
                     item.id,
-                    &text,
+                    &out.text,
                     &language,
                     "done",
                     started.elapsed().as_millis() as i64,
+                    out.extra_json().as_deref(),
                 );
                 clear(app, item.id);
                 let _ = app.emit(events::HISTORY_CHANGED, ());
@@ -107,6 +108,7 @@ async fn retry_failed(app: &AppHandle) {
                     &item.language,
                     "done",
                     started.elapsed().as_millis() as i64,
+                    None,
                 );
                 clear(app, item.id);
                 let _ = app.emit(events::HISTORY_CHANGED, ());

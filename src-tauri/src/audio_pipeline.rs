@@ -76,7 +76,7 @@ async fn transcribe_file(
     app: &AppHandle,
     ctx: &RecordingContext,
     path: &str,
-) -> Result<String, String> {
+) -> Result<file_transcribe::TranscriptOutput, String> {
     let reg = registry::effective(app);
     let model = reg
         .model_by_id(&ctx.model_id)
@@ -94,14 +94,24 @@ fn finalize(
     app: &AppHandle,
     id: i64,
     ctx: &RecordingContext,
-    result: Result<String, String>,
+    result: Result<file_transcribe::TranscriptOutput, String>,
     transcription_ms: i64,
 ) {
     let db = app.state::<HistoryDb>();
     match result {
-        Ok(text) if !text.trim().is_empty() => {
+        Ok(out) if !out.text.trim().is_empty() => {
+            let extra = out.extra_json();
+            let text = out.text;
             let language = crate::lang_detect::resolve(ctx.language.as_deref(), &text);
-            history::update_result(&db, id, &text, &language, "done", transcription_ms);
+            history::update_result(
+                &db,
+                id,
+                &text,
+                &language,
+                "done",
+                transcription_ms,
+                extra.as_deref(),
+            );
             log::info!("transcript (id {id}): {} chars", text.len());
             let _ = app.emit(
                 events::TRANSCRIPT_FINAL,
@@ -118,7 +128,7 @@ fn finalize(
         Ok(_) => {
             // Completed with no speech — a valid, done recording (empty text).
             let language = ctx.language.clone().unwrap_or_else(|| "auto".into());
-            history::update_result(&db, id, "", &language, "done", transcription_ms);
+            history::update_result(&db, id, "", &language, "done", transcription_ms, None);
             let _ = app.emit(events::HISTORY_CHANGED, ());
             hud::hide_hud(app);
         }
