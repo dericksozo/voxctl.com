@@ -188,19 +188,53 @@ fn write_store_string(app: &AppHandle, key: &str, val: Option<&str>) {
     }
 }
 
+/// Drop any mode that repeats an id already seen (keeping the first). Older builds
+/// and bootstrap races could leave duplicate `default`-id rows behind; this is the
+/// invariant that guarantees at most one mode per id — and therefore never two
+/// "default" modes.
+fn dedupe_by_id(modes: Vec<Mode>) -> Vec<Mode> {
+    let mut seen = std::collections::HashSet::new();
+    modes
+        .into_iter()
+        .filter(|m| seen.insert(m.id.clone()))
+        .collect()
+}
+
+/// Repair a `defaultModeId` that points at a mode which no longer exists (e.g. it
+/// was a duplicate collapsed by `dedupe_by_id`). Leaves an unset key alone so
+/// onboarding can still seed the default from the first validated key. Picks the
+/// onboarding default when present, else the first mode.
+fn ensure_default_valid(app: &AppHandle, modes: &[Mode]) {
+    let Some(cur) = read_store_string(app, DEFAULT_KEY) else {
+        return;
+    };
+    if modes.iter().any(|m| m.id == cur) {
+        return;
+    }
+    let pick = modes
+        .iter()
+        .find(|m| m.id == ONBOARDING_DEFAULT_ID)
+        .or_else(|| modes.first())
+        .map(|m| m.id.clone());
+    write_store_string(app, DEFAULT_KEY, pick.as_deref());
+}
+
 fn load(app: &AppHandle) -> Vec<Mode> {
     let valid = valid_model_ids(app);
     if let Ok(store) = app.store(STORE_FILE) {
         if let Some(v) = store.get(KEY) {
             if let Ok(modes) = serde_json::from_value::<Vec<Mode>>(v) {
-                let modes: Vec<Mode> = modes
-                    .into_iter()
-                    .map(|m| normalize_mode(m, &valid))
-                    .collect();
+                let modes = dedupe_by_id(
+                    modes
+                        .into_iter()
+                        .map(|m| normalize_mode(m, &valid))
+                        .collect(),
+                );
                 if let Ok(v) = serde_json::to_value(&modes) {
                     store.set(KEY, v);
                     let _ = store.save();
                 }
+                ensure_default_valid(app, &modes);
                 return modes;
             }
         }
@@ -417,6 +451,20 @@ pub fn get_active_mode(app: AppHandle) -> Option<ActiveMode> {
             reason: reason.to_string(),
         },
     )
+}
+
+/// Id of the priority-3 default mode — the one mode that is non-deletable. Falls
+/// back to the first mode when no explicit default is set yet (matching the
+/// active-mode resolution fallback), so the UI can always mark exactly one.
+#[tauri::command]
+pub fn get_default_mode_id(app: AppHandle) -> Option<String> {
+    let modes = load(&app);
+    if let Some(id) = read_store_string(&app, DEFAULT_KEY) {
+        if modes.iter().any(|m| m.id == id) {
+            return Some(id);
+        }
+    }
+    modes.first().map(|m| m.id.clone())
 }
 
 /// Recompute the active mode and emit `mode-changed` only when it actually
@@ -711,6 +759,34 @@ mod tests {
         assert!(m.builtin);
         assert!(m.trigger_apps.is_empty());
         assert!(m.trigger_websites.is_empty());
+    }
+
+    #[test]
+    fn dedupe_collapses_duplicate_ids_keeping_first() {
+        let modes = vec![
+            mode("default", &[], &[], true),
+            mode("code", &["Code"], &[], true),
+            // A stray second "default" from an older build / bootstrap race.
+            {
+                let mut m = mode("default", &[], &[], false);
+                m.name = "DUP".into();
+                m
+            },
+        ];
+        let out = dedupe_by_id(modes);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].id, "default");
+        // First wins: the original enabled DEFAULT, not the later DUP.
+        assert_eq!(out[0].name, "DEFAULT");
+        assert!(out[0].enabled);
+        assert_eq!(out[1].id, "code");
+    }
+
+    #[test]
+    fn dedupe_is_noop_when_ids_unique() {
+        let modes = fixture();
+        let n = modes.len();
+        assert_eq!(dedupe_by_id(modes).len(), n);
     }
 
     #[test]

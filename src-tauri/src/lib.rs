@@ -136,6 +136,7 @@ pub fn run() {
             commands::modes::delete_mode,
             commands::modes::set_mode_enabled,
             commands::modes::get_active_mode,
+            commands::modes::get_default_mode_id,
             commands::modes::pin_mode,
             commands::modes::unpin_mode,
             commands::modes::set_default_mode,
