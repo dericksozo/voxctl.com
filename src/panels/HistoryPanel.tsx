@@ -10,6 +10,10 @@ import { ProviderLogo } from "../components/ProviderLogo";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
+/** How many transcript cards to render per batch (grown on scroll). Keeps the
+ *  DOM small so returning to Home with a large archive stays snappy. */
+const PAGE_SIZE = 30;
+
 function dayLabel(ts: number): string {
   const d = new Date(ts);
   const now = new Date();
@@ -193,6 +197,10 @@ export function HistoryPanel({
   const [busy, setBusy] = useState<number | null>(null);
   // Search — the only list control on Home.
   const [query, setQuery] = useState("");
+  // Batch rendering: render a page of cards and grow as the sentinel scrolls in.
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
   // No error signal exists in props today; default false. RETRY calls onChange().
   // Surfaced for the verification phase to wire to a real archive-read error.
   const [archiveError] = useState(false);
@@ -217,6 +225,9 @@ export function HistoryPanel({
   useEffect(() => {
     if (stopToken > 0) stopPlayback();
   }, [stopPlayback, stopToken]);
+
+  // A new search starts the window over from the first page.
+  useEffect(() => setVisibleCount(PAGE_SIZE), [query]);
 
   // Collapsing a card resets its transient per-card UI.
   useEffect(() => {
@@ -276,6 +287,8 @@ export function HistoryPanel({
 
   async function doDelete(e: React.MouseEvent, item: HistoryItem) {
     e.stopPropagation();
+    // Stop playback first: the deleted WAV must not keep playing from memory.
+    if (audioRef.current?.id === item.id) stopPlayback();
     try {
       await deleteRecording(item.id);
       onChange();
@@ -339,13 +352,33 @@ export function HistoryPanel({
   const totalHours = (totalSecs / 3600).toFixed(1);
   const spendLabel = totalCost > 0 ? formatCost(totalCost) : "$0.00";
 
+  // Window the filtered list, then group the visible slice by day.
+  const shown = filtered.slice(0, visibleCount);
+  const hasMore = visibleCount < filtered.length;
   const groups: { day: string; items: HistoryItem[] }[] = [];
-  for (const item of filtered) {
+  for (const item of shown) {
     const day = dayLabel(item.createdAt);
     const g = groups.find((x) => x.day === day);
     if (g) g.items.push(item);
     else groups.push({ day, items: [item] });
   }
+
+  // Grow the window as the bottom sentinel scrolls into view. The scroll root is
+  // the panel-body; re-observing on each bump lets a tall viewport keep filling
+  // until the sentinel is pushed out of view (or nothing is left).
+  useEffect(() => {
+    const root = scrollRef.current;
+    const sentinel = sentinelRef.current;
+    if (!root || !sentinel) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((en) => en.isIntersecting)) setVisibleCount((n) => n + PAGE_SIZE);
+      },
+      { root, rootMargin: "400px" },
+    );
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, [hasMore, visibleCount]);
 
   // ---- ERROR state (local flag; RETRY → onChange) ----
   if (archiveError) {
@@ -421,7 +454,7 @@ export function HistoryPanel({
   }
 
   return (
-    <div className="panel-body hm">
+    <div className="panel-body hm" ref={scrollRef}>
       {/* stats strip */}
       <div className="hm-stats">
         <div className="hm-stat">
@@ -733,6 +766,7 @@ export function HistoryPanel({
           </div>
         ))
       )}
+      {hasMore ? <div ref={sentinelRef} className="hm-sentinel" aria-hidden="true" /> : null}
     </div>
   );
 }
