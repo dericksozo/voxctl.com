@@ -52,10 +52,10 @@
   "onboarding.ax.enable": "ENABLE ACCESSIBILITY",
   "onboarding.ax.skip": "SKIP FOR NOW",
 
-  "home.words": "WORDS // ALL TIME",
+  "home.words": "WORDS ALL TIME",
   "home.minutes": "MINUTES CAPTURED",
   "home.interfaces": "INTERFACES ENGAGED",
-  "home.spend": "EST. SPEND // ALL TIME",
+  "home.spend": "ESTIMATED SPEND ALL TIME",
   "home.spendSub": "LOCAL ESTIMATE",
   "home.gettingStarted": "GETTING STARTED",
   "home.topInterfaces": "TOP INTERFACES",
