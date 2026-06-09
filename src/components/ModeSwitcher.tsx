@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { t } from "../i18n";
 import { pinMode, unpinMode } from "../lib/ipc";
+import { modeUsable, type ProviderStatus, type Registry } from "../lib/registry";
 import type { ActiveMode, Mode } from "../lib/types";
 
 /** Top-bar active-mode control: shows the active mode + WHY it's active
@@ -9,10 +10,14 @@ import type { ActiveMode, Mode } from "../lib/types";
 export function ModeSwitcher({
   modes,
   active,
+  registry,
+  providers,
   onChange,
 }: {
   modes: Mode[];
   active: ActiveMode | null;
+  registry: Registry | null;
+  providers: ProviderStatus;
   onChange: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -67,17 +72,28 @@ export function ModeSwitcher({
           {enabled.length === 0 ? (
             <div className="ms-empty">// NO ENABLED MODES</div>
           ) : (
-            enabled.map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                className={"ms-item" + (m.id === active?.mode.id ? " sel" : "")}
-                onClick={() => pick(m.id)}
-              >
-                <span className="ms-radio">{m.id === active?.mode.id ? "●" : "○"}</span>
-                <span className="ms-name">{m.name}</span>
-              </button>
-            ))
+            enabled.map((m) => {
+              // A mode whose provider key was removed can't run — don't let it
+              // be selected. Show it locked instead of silently pinning a dud.
+              const usable = modeUsable(registry, providers, m.model);
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  className={
+                    "ms-item" +
+                    (m.id === active?.mode.id ? " sel" : "") +
+                    (usable ? "" : " is-locked")
+                  }
+                  disabled={!usable}
+                  onClick={() => pick(m.id)}
+                >
+                  <span className="ms-radio">{m.id === active?.mode.id ? "●" : "○"}</span>
+                  <span className="ms-name">{m.name}</span>
+                  {usable ? null : <span className="ms-lock">{t("modes.keyRequired")}</span>}
+                </button>
+              );
+            })
           )}
           {pinned ? (
             <button type="button" className="ms-unpin" onClick={unpin}>

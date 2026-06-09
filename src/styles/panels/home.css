@@ -364,6 +364,17 @@
   color: var(--ink-2);
   display: inline-flex;
 }
+/* A file mode whose provider key was removed: clicking routes to Settings to add
+   the key rather than starting a doomed re-run. */
+.hm-menu-item.is-locked {
+  color: var(--ink-3);
+}
+.hm-menu-lock {
+  margin-left: auto;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: var(--mag);
+}
 
 /* delete two-step confirm */
 .hm-del {

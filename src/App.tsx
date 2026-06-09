@@ -221,6 +221,7 @@ export default function App() {
             history={history}
             modes={modes}
             registry={registry}
+            providers={providers}
             onChange={refreshHistory}
             go={switchTo}
             stopToken={audioStopToken}
@@ -282,7 +283,13 @@ export default function App() {
               {t("perm.title")}
             </button>
           ) : (
-            <ModeSwitcher modes={modes} active={activeMode} onChange={refreshModes} />
+            <ModeSwitcher
+              modes={modes}
+              active={activeMode}
+              registry={registry}
+              providers={providers}
+              onChange={refreshModes}
+            />
           )}
         </div>
         <div className="trace">

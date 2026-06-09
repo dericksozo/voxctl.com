@@ -525,6 +525,20 @@ button.mode-pill {
 .ms-name {
   flex: 1;
 }
+/* A mode whose provider key was removed: shown but not selectable. */
+.ms-item:disabled,
+.ms-item.is-locked {
+  cursor: not-allowed;
+  color: var(--gray);
+}
+.ms-item:disabled:hover {
+  background: none;
+}
+.ms-lock {
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: var(--gray);
+}
 .ms-unpin {
   margin-top: 4px;
   background: none;

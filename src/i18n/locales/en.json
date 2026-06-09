@@ -87,6 +87,7 @@
   "history.rerunPick": "RE-RUN VIA MODE…",
   "history.rerunHeadline": "Captured live? Re-run through a file mode for a cleaner transcript.",
   "history.rerunCreate": "CREATE A FILE MODE",
+  "history.addKey": "ADD KEY",
 
   "modes.add": "DEFINE NEW MODE",
   "modes.active": "ACTIVE",
@@ -97,6 +98,7 @@
   "modes.lang": "LANG",
   "modes.keywords": "KEYWORDS",
   "modes.addKey": "ADD YOUR {provider} KEY",
+  "modes.keyRequired": "KEY REQUIRED",
   "modes.badgeLegend": "[ LIVE ] TRANSCRIBES AS YOU SPEAK · [ FILE ] TRANSCRIBES A SAVED RECORDING",
   "modes.accuracy": "ACCURACY",
   "modes.speed": "SPEED",
