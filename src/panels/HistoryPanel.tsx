@@ -322,6 +322,9 @@ export function HistoryPanel({
       /* ignore */
     }
     setConfirmDel(null);
+    // Collapse the (now-removed) card so the rest of the list leaves its dimmed
+    // focus state — otherwise `expanded` still points at the deleted id.
+    setExpanded(null);
   }
 
   async function doRerun(e: React.MouseEvent, item: HistoryItem, modeId: string) {
@@ -627,21 +630,27 @@ export function HistoryPanel({
                             style={{ display: "flex", alignItems: "center", gap: 12 }}
                             onClick={(e) => e.stopPropagation()}
                           >
-                            <button
-                              type="button"
-                              className="vx-ico"
-                              title={t("history.copy")}
-                              disabled={!hasText}
-                              onClick={(e) => doCopy(e, item)}
-                            >
-                              {cp ? (
-                                <span style={{ color: "var(--mag)" }}>
-                                  <IcoCheck size={15} />
+                            <span className="tipwrap">
+                              <button
+                                type="button"
+                                className="vx-ico"
+                                disabled={!hasText}
+                                onClick={(e) => doCopy(e, item)}
+                              >
+                                {cp ? (
+                                  <span style={{ color: "var(--mag)" }}>
+                                    <IcoCheck size={15} />
+                                  </span>
+                                ) : (
+                                  <IcoCopy size={15} />
+                                )}
+                              </button>
+                              {hasText ? (
+                                <span className="tip">
+                                  {cp ? t("history.copied") : t("history.copy")}
                                 </span>
-                              ) : (
-                                <IcoCopy size={15} />
-                              )}
-                            </button>
+                              ) : null}
+                            </span>
                             <ProviderChip provider={provider} mode={item.modeName} size={15} />
                           </div>
                         ) : null}
