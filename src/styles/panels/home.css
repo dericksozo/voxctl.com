@@ -204,17 +204,6 @@
   color: var(--err);
   border-color: color-mix(in srgb, var(--err) 50%, transparent);
 }
-.hm-ctx {
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  color: var(--ink-3);
-  white-space: nowrap;
-  /* A long app name / URL host truncates instead of widening the row. */
-  max-width: 240px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 /* Infinite-scroll growth sentinel (zero visual footprint). */
 .hm-sentinel {
   height: 1px;
@@ -363,6 +352,17 @@
 .hm-menu-logo {
   color: var(--ink-2);
   display: inline-flex;
+}
+/* A file mode whose provider key was removed: clicking routes to Settings to add
+   the key rather than starting a doomed re-run. */
+.hm-menu-item.is-locked {
+  color: var(--ink-3);
+}
+.hm-menu-lock {
+  margin-left: auto;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: var(--mag);
 }
 
 /* delete two-step confirm */

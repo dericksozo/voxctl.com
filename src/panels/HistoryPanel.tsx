@@ -4,7 +4,14 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { t } from "../i18n";
 import { deleteRecording, incrementCopy, retranscribe } from "../lib/ipc";
 import type { HistoryItem, Mode } from "../lib/types";
-import { estimateCost, formatCost, modelById, type Registry } from "../lib/registry";
+import {
+  estimateCost,
+  formatCost,
+  modelById,
+  modeUsable,
+  type ProviderStatus,
+  type Registry,
+} from "../lib/registry";
 import { ProviderLogo } from "../components/ProviderLogo";
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -197,18 +204,31 @@ export function HistoryPanel({
   history,
   modes,
   registry,
+  providers,
   onChange,
   go,
   stopToken = 0,
+  transitioning = false,
+  onSection,
 }: {
   history: HistoryItem[] | null | undefined;
   modes: Mode[];
   registry: Registry | null;
+  providers: ProviderStatus;
   onChange: () => void;
   go: (panel: string) => void;
   stopToken?: number;
+  /** True while the panel-switch animation is running. Used to defer the heavy
+   *  card render until the switch settles so opening Home feels instant. */
+  transitioning?: boolean;
+  /** Reports the day group nearest the top so the header reads "// HOME / TODAY". */
+  onSection?: (s: { label: string; desc: string } | null) => void;
 }) {
   const [expanded, setExpanded] = useState<number | null>(null);
+  // Defer the (heavy) card list until the panel-switch animation settles, so
+  // tabbing into Home is instant: paint the skeleton first, then the list. Starts
+  // settled when we mount outside a transition (e.g. cold app start on Home).
+  const [settled, setSettled] = useState(!transitioning);
   const [tab, setTab] = useState<TabKey>("text");
   const [copied, setCopied] = useState<number | null>(null);
   const [playing, setPlaying] = useState<number | null>(null);
@@ -221,6 +241,8 @@ export function HistoryPanel({
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  // Last day reported to the header scroll-spy (avoids redundant onSection calls).
+  const lastDay = useRef<string | null>(null);
   // No error signal exists in props today; default false. RETRY calls onChange().
   // Surfaced for the verification phase to wire to a real archive-read error.
   const [archiveError] = useState(false);
@@ -317,6 +339,9 @@ export function HistoryPanel({
       /* ignore */
     }
     setConfirmDel(null);
+    // Collapse the (now-removed) card so the rest of the list leaves its dimmed
+    // focus state — otherwise `expanded` still points at the deleted id.
+    setExpanded(null);
   }
 
   async function doRerun(e: React.MouseEvent, item: HistoryItem, modeId: string) {
@@ -383,6 +408,8 @@ export function HistoryPanel({
     if (g) g.items.push(item);
     else groups.push({ day, items: [item] });
   }
+  // Re-run the scroll-spy when the set of day groups changes (load/search/grow).
+  const dayKey = groups.map((g) => g.day).join("|");
 
   // Grow the window as the bottom sentinel scrolls into view. The scroll root is
   // the panel-body; re-observing on each bump lets a tall viewport keep filling
@@ -400,6 +427,36 @@ export function HistoryPanel({
     io.observe(sentinel);
     return () => io.disconnect();
   }, [hasMore, visibleCount]);
+
+  // Header scroll-spy: report the day group nearest the top of the scroll
+  // container so the content-frame title tracks where you are (`// HOME / TODAY`).
+  // Mirrors the Settings scroll-spy. desc is "" so SYS.DESC keeps the Home blurb.
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    const report = () => {
+      const line = root.getBoundingClientRect().top + 90;
+      let active: string | null = null;
+      for (const node of root.querySelectorAll<HTMLElement>("[data-day]")) {
+        if (node.getBoundingClientRect().top <= line) active = node.dataset.day ?? active;
+      }
+      if (active !== lastDay.current) {
+        lastDay.current = active;
+        onSection?.(active ? { label: active, desc: "" } : null);
+      }
+    };
+    report();
+    root.addEventListener("scroll", report, { passive: true });
+    return () => root.removeEventListener("scroll", report);
+    // `settled` is a dep so the spy re-runs once the real list (and scroll root)
+    // mounts after the deferred render — otherwise the day title wouldn't appear
+    // until the first scroll.
+  }, [onSection, dayKey, settled]);
+
+  // Render the card list once the switch animation has settled.
+  useEffect(() => {
+    if (!transitioning) setSettled(true);
+  }, [transitioning]);
 
   // ---- ERROR state (local flag; RETRY → onChange) ----
   if (archiveError) {
@@ -425,8 +482,8 @@ export function HistoryPanel({
     );
   }
 
-  // ---- LOADING skeleton ----
-  if (loading) {
+  // ---- LOADING skeleton ---- (also shown while a panel switch settles)
+  if (loading || !settled) {
     return (
       <div className="panel-body hm">
         <div className="hm-skel-day">
@@ -546,7 +603,7 @@ export function HistoryPanel({
         </div>
       ) : (
         groups.map((g) => (
-          <div className="hm-group" key={g.day}>
+          <div className="hm-group" key={g.day} data-day={g.day}>
             <div className="hm-day">
               <span className="hm-day-label">{g.day}</span>
               <span className="hm-day-line" />
@@ -591,28 +648,33 @@ export function HistoryPanel({
                       </div>
                       <div className="hm-head-right">
                         {sc ? <span className={"hm-status " + sc.cls}>{sc.label}</span> : null}
-                        {ctx ? <span className="hm-ctx">{ctx.toUpperCase()}</span> : null}
                         {!exp ? (
                           <div
                             className="hovctl"
                             style={{ display: "flex", alignItems: "center", gap: 12 }}
                             onClick={(e) => e.stopPropagation()}
                           >
-                            <button
-                              type="button"
-                              className="vx-ico"
-                              title={t("history.copy")}
-                              disabled={!hasText}
-                              onClick={(e) => doCopy(e, item)}
-                            >
-                              {cp ? (
-                                <span style={{ color: "var(--mag)" }}>
-                                  <IcoCheck size={15} />
+                            <span className="tipwrap">
+                              <button
+                                type="button"
+                                className="vx-ico"
+                                disabled={!hasText}
+                                onClick={(e) => doCopy(e, item)}
+                              >
+                                {cp ? (
+                                  <span style={{ color: "var(--mag)" }}>
+                                    <IcoCheck size={15} />
+                                  </span>
+                                ) : (
+                                  <IcoCopy size={15} />
+                                )}
+                              </button>
+                              {hasText ? (
+                                <span className="tip">
+                                  {cp ? t("history.copied") : t("history.copy")}
                                 </span>
-                              ) : (
-                                <IcoCopy size={15} />
-                              )}
-                            </button>
+                              ) : null}
+                            </span>
                             <ProviderChip provider={provider} mode={item.modeName} size={15} />
                           </div>
                         ) : null}
@@ -717,13 +779,25 @@ export function HistoryPanel({
                                     <div className="hm-menu-head">RE-RUN THROUGH MODE</div>
                                     {fileModes.map((m) => {
                                       const mp = modelById(registry, m.model)?.provider;
+                                      // A mode whose provider key was removed can't
+                                      // re-run; show it locked and route to Settings
+                                      // instead of attempting a doomed transcription.
+                                      const usable = modeUsable(registry, providers, m.model);
                                       return (
                                         <button
                                           key={m.id}
                                           type="button"
-                                          className="hm-menu-item"
-                                          title={t("history.rerunHeadline")}
-                                          onClick={(e) => doRerun(e, item, m.id)}
+                                          className={"hm-menu-item" + (usable ? "" : " is-locked")}
+                                          title={usable ? t("history.rerunHeadline") : undefined}
+                                          onClick={(e) => {
+                                            if (!usable) {
+                                              e.stopPropagation();
+                                              setRerunFor(null);
+                                              go("settings");
+                                              return;
+                                            }
+                                            doRerun(e, item, m.id);
+                                          }}
                                         >
                                           {mp ? (
                                             <span className="hm-menu-logo">
@@ -731,6 +805,9 @@ export function HistoryPanel({
                                             </span>
                                           ) : null}
                                           {modeLabel(m)}
+                                          {usable ? null : (
+                                            <span className="hm-menu-lock">{t("history.addKey")}</span>
+                                          )}
                                         </button>
                                       );
                                     })}
@@ -797,6 +874,12 @@ export function HistoryPanel({
                             <span className="hm-meta-prov">
                               <ProviderChip provider={provider} mode={item.modeName} size={15} />
                               <span className="hm-meta-k">{provider.toUpperCase()}</span>
+                            </span>
+                          ) : null}
+                          {ctx ? (
+                            <span className="hm-meta-cell">
+                              <span className="hm-meta-k">APP</span>
+                              <span className="hm-meta-v">{ctx.toUpperCase()}</span>
                             </span>
                           ) : null}
                           <span className="hm-meta-cell">
