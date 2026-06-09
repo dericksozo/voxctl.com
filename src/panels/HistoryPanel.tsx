@@ -4,7 +4,14 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { t } from "../i18n";
 import { deleteRecording, incrementCopy, retranscribe } from "../lib/ipc";
 import type { HistoryItem, Mode } from "../lib/types";
-import { estimateCost, formatCost, modelById, type Registry } from "../lib/registry";
+import {
+  estimateCost,
+  formatCost,
+  modelById,
+  modeUsable,
+  type ProviderStatus,
+  type Registry,
+} from "../lib/registry";
 import { ProviderLogo } from "../components/ProviderLogo";
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -197,6 +204,7 @@ export function HistoryPanel({
   history,
   modes,
   registry,
+  providers,
   onChange,
   go,
   stopToken = 0,
@@ -205,6 +213,7 @@ export function HistoryPanel({
   history: HistoryItem[] | null | undefined;
   modes: Mode[];
   registry: Registry | null;
+  providers: ProviderStatus;
   onChange: () => void;
   go: (panel: string) => void;
   stopToken?: number;
@@ -755,13 +764,25 @@ export function HistoryPanel({
                                     <div className="hm-menu-head">RE-RUN THROUGH MODE</div>
                                     {fileModes.map((m) => {
                                       const mp = modelById(registry, m.model)?.provider;
+                                      // A mode whose provider key was removed can't
+                                      // re-run; show it locked and route to Settings
+                                      // instead of attempting a doomed transcription.
+                                      const usable = modeUsable(registry, providers, m.model);
                                       return (
                                         <button
                                           key={m.id}
                                           type="button"
-                                          className="hm-menu-item"
-                                          title={t("history.rerunHeadline")}
-                                          onClick={(e) => doRerun(e, item, m.id)}
+                                          className={"hm-menu-item" + (usable ? "" : " is-locked")}
+                                          title={usable ? t("history.rerunHeadline") : undefined}
+                                          onClick={(e) => {
+                                            if (!usable) {
+                                              e.stopPropagation();
+                                              setRerunFor(null);
+                                              go("settings");
+                                              return;
+                                            }
+                                            doRerun(e, item, m.id);
+                                          }}
                                         >
                                           {mp ? (
                                             <span className="hm-menu-logo">
@@ -769,6 +790,9 @@ export function HistoryPanel({
                                             </span>
                                           ) : null}
                                           {modeLabel(m)}
+                                          {usable ? null : (
+                                            <span className="hm-menu-lock">{t("history.addKey")}</span>
+                                          )}
                                         </button>
                                       );
                                     })}

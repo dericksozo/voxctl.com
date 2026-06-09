@@ -82,6 +82,18 @@ export function modelById(reg: Registry | null, id: string): ModelRecord | undef
   return reg?.models.find((m) => m.id === id);
 }
 
+/** True when a mode can actually run: its model exists in the registry and that
+ *  model's provider has a validated key. Used to gate mode selection (switcher)
+ *  and re-run after a key is removed. */
+export function modeUsable(
+  reg: Registry | null,
+  providers: ProviderStatus,
+  modelId: string,
+): boolean {
+  const m = modelById(reg, modelId);
+  return !!m && providerValidated(providers, m.provider);
+}
+
 /** LIVE / FILE / LIVE · FILE badge text for a model row. */
 export function modelBadge(m: ModelRecord): string {
   if (m.canLive && m.canFile) return "LIVE · FILE";
