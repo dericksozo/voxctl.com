@@ -671,7 +671,9 @@ button.mode-pill {
   background: var(--mag);
   vertical-align: -0.18em;
   margin-left: 0.18em;
-  animation: blink 1.05s step-end infinite;
+  /* Same 1s cadence as `.blink` (nav caret) so the two on-screen carets — SYS.DESC
+     and the active nav item — blink in sync (both mount at startup, never remount). */
+  animation: blink 1s step-end infinite;
 }
 @media (prefers-reduced-motion: reduce) {
   .caret {

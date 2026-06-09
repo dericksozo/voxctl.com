@@ -200,6 +200,7 @@ export function HistoryPanel({
   onChange,
   go,
   stopToken = 0,
+  onSection,
 }: {
   history: HistoryItem[] | null | undefined;
   modes: Mode[];
@@ -207,6 +208,8 @@ export function HistoryPanel({
   onChange: () => void;
   go: (panel: string) => void;
   stopToken?: number;
+  /** Reports the day group nearest the top so the header reads "// HOME / TODAY". */
+  onSection?: (s: { label: string; desc: string } | null) => void;
 }) {
   const [expanded, setExpanded] = useState<number | null>(null);
   const [tab, setTab] = useState<TabKey>("text");
@@ -221,6 +224,8 @@ export function HistoryPanel({
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  // Last day reported to the header scroll-spy (avoids redundant onSection calls).
+  const lastDay = useRef<string | null>(null);
   // No error signal exists in props today; default false. RETRY calls onChange().
   // Surfaced for the verification phase to wire to a real archive-read error.
   const [archiveError] = useState(false);
@@ -383,6 +388,8 @@ export function HistoryPanel({
     if (g) g.items.push(item);
     else groups.push({ day, items: [item] });
   }
+  // Re-run the scroll-spy when the set of day groups changes (load/search/grow).
+  const dayKey = groups.map((g) => g.day).join("|");
 
   // Grow the window as the bottom sentinel scrolls into view. The scroll root is
   // the panel-body; re-observing on each bump lets a tall viewport keep filling
@@ -400,6 +407,28 @@ export function HistoryPanel({
     io.observe(sentinel);
     return () => io.disconnect();
   }, [hasMore, visibleCount]);
+
+  // Header scroll-spy: report the day group nearest the top of the scroll
+  // container so the content-frame title tracks where you are (`// HOME / TODAY`).
+  // Mirrors the Settings scroll-spy. desc is "" so SYS.DESC keeps the Home blurb.
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    const report = () => {
+      const line = root.getBoundingClientRect().top + 90;
+      let active: string | null = null;
+      for (const node of root.querySelectorAll<HTMLElement>("[data-day]")) {
+        if (node.getBoundingClientRect().top <= line) active = node.dataset.day ?? active;
+      }
+      if (active !== lastDay.current) {
+        lastDay.current = active;
+        onSection?.(active ? { label: active, desc: "" } : null);
+      }
+    };
+    report();
+    root.addEventListener("scroll", report, { passive: true });
+    return () => root.removeEventListener("scroll", report);
+  }, [onSection, dayKey]);
 
   // ---- ERROR state (local flag; RETRY → onChange) ----
   if (archiveError) {
@@ -546,7 +575,7 @@ export function HistoryPanel({
         </div>
       ) : (
         groups.map((g) => (
-          <div className="hm-group" key={g.day}>
+          <div className="hm-group" key={g.day} data-day={g.day}>
             <div className="hm-day">
               <span className="hm-day-label">{g.day}</span>
               <span className="hm-day-line" />

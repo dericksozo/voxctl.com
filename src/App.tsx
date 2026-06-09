@@ -62,8 +62,9 @@ export default function App() {
   const [permsReady, setPermsReady] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
-  /** Active Settings section (scroll-driven) → header + SYS.DESC. */
-  const [settingsSection, setSettingsSection] = useState<{ label: string; desc: string } | null>(null);
+  /** Active sub-section (scroll-driven) → header sub-title + SYS.DESC. Reported by
+   *  panels that have one (Settings sections, Home day groups); null otherwise. */
+  const [headerSection, setHeaderSection] = useState<{ label: string; desc: string } | null>(null);
   const timers = useRef<number[]>([]);
   const toastTimer = useRef<number | undefined>(undefined);
 
@@ -107,11 +108,6 @@ export default function App() {
     permsReady &&
     (!config.onboardingCompleted || !perms.microphone || !perms.accessibility || !apiKeySet);
 
-  // The section header/blurb only applies inside Settings.
-  useEffect(() => {
-    if (view !== "settings") setSettingsSection(null);
-  }, [view]);
-
   useTauriEvent<RecState>(EVT.recState, (e) => setRecording(e.recording));
   useTauriEvent<ModeChanged>(EVT.modeChanged, () => refreshModes());
   useTauriEvent<unknown>(EVT.historyChanged, () => refreshHistory());
@@ -153,6 +149,9 @@ export default function App() {
       setPhase("closing");
       timers.current = [
         window.setTimeout(() => {
+          // Reset the header sub-title for the incoming panel; panels that have
+          // one (Home/Settings) re-report it on mount, overwriting this null.
+          setHeaderSection(null);
           setView(id);
           setPhase("opening");
         }, 150),
@@ -225,6 +224,7 @@ export default function App() {
             onChange={refreshHistory}
             go={switchTo}
             stopToken={audioStopToken}
+            onSection={setHeaderSection}
           />
         );
       case "stats":
@@ -250,7 +250,7 @@ export default function App() {
             perms={perms}
             refreshPerms={refreshPerms}
             recording={recording}
-            onSection={setSettingsSection}
+            onSection={setHeaderSection}
           />
         );
       default:
@@ -259,11 +259,10 @@ export default function App() {
   }
 
   const baseLabel = showOnboarding ? t("onboarding.title") : (MENU.find((m) => m.id === view)?.label ?? "");
-  const sectionActive = !showOnboarding && view === "settings" ? settingsSection : null;
-  const labelText = "// " + baseLabel + (sectionActive ? " / " + sectionActive.label : "");
+  const sectionActive = showOnboarding ? null : headerSection;
   const descText = showOnboarding
     ? t("onboarding.desc")
-    : sectionActive
+    : sectionActive?.desc
       ? sectionActive.desc
       : (DESC[view] ?? "");
   const frameCls = "content-frame " + (phase === "closing" ? "closing" : phase === "opening" ? "opening" : "");
@@ -349,9 +348,29 @@ export default function App() {
           <Frame
             className={frameCls}
             label={
+              // Segmented title: the static "//" and "/" separators never retype.
+              // The base ("HOME"/"SETTINGS") retypes only on panel switch (keyed by
+              // view); the sub-section retypes only when it changes (keyed by label).
+              // No trailing caret here — the only carets are SYS.DESC + active nav.
               <>
-                <Typewriter text={labelText} run={phase !== "closing"} speed={11} />
-                {phase !== "closing" ? <span className="caret" /> : null}
+                {"// "}
+                <Typewriter
+                  key={"base:" + (showOnboarding ? "onb" : view)}
+                  text={baseLabel}
+                  run={phase !== "closing"}
+                  speed={11}
+                />
+                {sectionActive ? (
+                  <>
+                    {" / "}
+                    <Typewriter
+                      key={"sec:" + view + ":" + sectionActive.label}
+                      text={sectionActive.label}
+                      run={phase !== "closing"}
+                      speed={11}
+                    />
+                  </>
+                ) : null}
               </>
             }
             tr="VX-0xA7"
