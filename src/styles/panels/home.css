@@ -204,17 +204,6 @@
   color: var(--err);
   border-color: color-mix(in srgb, var(--err) 50%, transparent);
 }
-.hm-ctx {
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  color: var(--ink-3);
-  white-space: nowrap;
-  /* A long app name / URL host truncates instead of widening the row. */
-  max-width: 240px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 /* Infinite-scroll growth sentinel (zero visual footprint). */
 .hm-sentinel {
   height: 1px;

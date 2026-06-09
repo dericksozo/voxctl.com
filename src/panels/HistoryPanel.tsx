@@ -632,7 +632,6 @@ export function HistoryPanel({
                       </div>
                       <div className="hm-head-right">
                         {sc ? <span className={"hm-status " + sc.cls}>{sc.label}</span> : null}
-                        {ctx ? <span className="hm-ctx">{ctx.toUpperCase()}</span> : null}
                         {!exp ? (
                           <div
                             className="hovctl"
@@ -859,6 +858,12 @@ export function HistoryPanel({
                             <span className="hm-meta-prov">
                               <ProviderChip provider={provider} mode={item.modeName} size={15} />
                               <span className="hm-meta-k">{provider.toUpperCase()}</span>
+                            </span>
+                          ) : null}
+                          {ctx ? (
+                            <span className="hm-meta-cell">
+                              <span className="hm-meta-k">APP</span>
+                              <span className="hm-meta-v">{ctx.toUpperCase()}</span>
                             </span>
                           ) : null}
                           <span className="hm-meta-cell">
