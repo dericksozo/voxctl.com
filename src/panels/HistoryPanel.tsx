@@ -208,6 +208,7 @@ export function HistoryPanel({
   onChange,
   go,
   stopToken = 0,
+  transitioning = false,
   onSection,
 }: {
   history: HistoryItem[] | null | undefined;
@@ -217,10 +218,17 @@ export function HistoryPanel({
   onChange: () => void;
   go: (panel: string) => void;
   stopToken?: number;
+  /** True while the panel-switch animation is running. Used to defer the heavy
+   *  card render until the switch settles so opening Home feels instant. */
+  transitioning?: boolean;
   /** Reports the day group nearest the top so the header reads "// HOME / TODAY". */
   onSection?: (s: { label: string; desc: string } | null) => void;
 }) {
   const [expanded, setExpanded] = useState<number | null>(null);
+  // Defer the (heavy) card list until the panel-switch animation settles, so
+  // tabbing into Home is instant: paint the skeleton first, then the list. Starts
+  // settled when we mount outside a transition (e.g. cold app start on Home).
+  const [settled, setSettled] = useState(!transitioning);
   const [tab, setTab] = useState<TabKey>("text");
   const [copied, setCopied] = useState<number | null>(null);
   const [playing, setPlaying] = useState<number | null>(null);
@@ -440,7 +448,15 @@ export function HistoryPanel({
     report();
     root.addEventListener("scroll", report, { passive: true });
     return () => root.removeEventListener("scroll", report);
-  }, [onSection, dayKey]);
+    // `settled` is a dep so the spy re-runs once the real list (and scroll root)
+    // mounts after the deferred render — otherwise the day title wouldn't appear
+    // until the first scroll.
+  }, [onSection, dayKey, settled]);
+
+  // Render the card list once the switch animation has settled.
+  useEffect(() => {
+    if (!transitioning) setSettled(true);
+  }, [transitioning]);
 
   // ---- ERROR state (local flag; RETRY → onChange) ----
   if (archiveError) {
@@ -466,8 +482,8 @@ export function HistoryPanel({
     );
   }
 
-  // ---- LOADING skeleton ----
-  if (loading) {
+  // ---- LOADING skeleton ---- (also shown while a panel switch settles)
+  if (loading || !settled) {
     return (
       <div className="panel-body hm">
         <div className="hm-skel-day">
