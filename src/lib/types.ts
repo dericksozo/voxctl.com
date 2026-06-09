@@ -68,6 +68,22 @@ export interface ActiveMode {
   reason: ActiveReason;
 }
 
+/** One word with its timing (and speaker, when diarization is on). */
+export interface WordStamp {
+  word: string;
+  start: number;
+  end: number;
+  speaker?: string;
+}
+
+/** A contiguous span attributed to one speaker (diarization output). */
+export interface SpeakerSeg {
+  speaker: string;
+  text: string;
+  start: number;
+  end: number;
+}
+
 /** Lifecycle of a recording's transcription. */
 export type RecordingStatus = "transcribing" | "done" | "failed" | "needs_transcription";
 
@@ -91,6 +107,12 @@ export interface HistoryItem {
   modelId: string;
   /** Size of the saved WAV on disk, in bytes (0 if the file is gone). */
   audioBytes: number;
+  /** Wall-clock from recording-stop to final transcript, in ms (0 if unknown). */
+  transcriptionMs: number;
+  /** Per-word timing (empty unless the mode/model produced word timestamps). */
+  wordStamps: WordStamp[];
+  /** Speaker-attributed segments (empty unless diarization produced them). */
+  speakers: SpeakerSeg[];
 }
 
 /** Disk usage of the recordings directory (Storage section). */

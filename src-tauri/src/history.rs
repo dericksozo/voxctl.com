@@ -13,6 +13,8 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
+use crate::file_transcribe::{SpeakerSeg, WordStamp};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryItem {
@@ -34,6 +36,33 @@ pub struct HistoryItem {
     pub model_id: String,
     /// Size of the saved WAV on disk, in bytes (0 if the file is gone).
     pub audio_bytes: i64,
+    /// Wall-clock from recording-stop to the final transcript being persisted,
+    /// in milliseconds (0 until a transcription completes).
+    pub transcription_ms: i64,
+    /// Per-word timing (present only when the mode/model produced word timestamps).
+    #[serde(default)]
+    pub word_stamps: Vec<WordStamp>,
+    /// Speaker-attributed segments (present only when diarization produced them).
+    #[serde(default)]
+    pub speakers: Vec<SpeakerSeg>,
+}
+
+/// Parse the persisted `extra_json` blob (`{ words, speakers }`) into the typed
+/// structured fields. Tolerates NULL/empty/garbage by returning empties.
+fn parse_extra(s: Option<String>) -> (Vec<WordStamp>, Vec<SpeakerSeg>) {
+    #[derive(Deserialize, Default)]
+    struct Extra {
+        #[serde(default)]
+        words: Vec<WordStamp>,
+        #[serde(default)]
+        speakers: Vec<SpeakerSeg>,
+    }
+    let Some(s) = s.filter(|s| !s.is_empty()) else {
+        return (Vec::new(), Vec::new());
+    };
+    serde_json::from_str::<Extra>(&s)
+        .map(|e| (e.words, e.speakers))
+        .unwrap_or_default()
 }
 
 /// Managed state: the open SQLite connection.
@@ -77,7 +106,9 @@ fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
             audio_path    TEXT    NOT NULL,
             status        TEXT    NOT NULL DEFAULT 'done',
             model_id      TEXT    NOT NULL DEFAULT '',
-            audio_bytes   INTEGER NOT NULL DEFAULT 0
+            audio_bytes   INTEGER NOT NULL DEFAULT 0,
+            transcription_ms INTEGER NOT NULL DEFAULT 0,
+            extra_json    TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_recordings_created_at ON recordings(created_at DESC);",
     )
@@ -106,6 +137,14 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         conn.execute_batch(
             "ALTER TABLE recordings ADD COLUMN audio_bytes INTEGER NOT NULL DEFAULT 0",
         )?;
+    }
+    if !have.iter().any(|c| c == "transcription_ms") {
+        conn.execute_batch(
+            "ALTER TABLE recordings ADD COLUMN transcription_ms INTEGER NOT NULL DEFAULT 0",
+        )?;
+    }
+    if !have.iter().any(|c| c == "extra_json") {
+        conn.execute_batch("ALTER TABLE recordings ADD COLUMN extra_json TEXT")?;
     }
     Ok(())
 }
@@ -171,7 +210,7 @@ fn insert_row(
 }
 
 fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<HistoryItem> {
-    Ok(HistoryItem {
+    let mut item = HistoryItem {
         id: row.get(0)?,
         created_at: row.get(1)?,
         transcript: row.get(2)?,
@@ -187,11 +226,18 @@ fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<HistoryItem> {
         status: row.get(12)?,
         model_id: row.get(13)?,
         audio_bytes: row.get(14)?,
-    })
+        transcription_ms: row.get(15)?,
+        word_stamps: Vec::new(),
+        speakers: Vec::new(),
+    };
+    let (word_stamps, speakers) = parse_extra(row.get::<_, Option<String>>(16)?);
+    item.word_stamps = word_stamps;
+    item.speakers = speakers;
+    Ok(item)
 }
 
 const SELECT_COLS: &str =
-    "id, created_at, transcript, language, mode_name, app_name, website, duration_secs, words, favorite, copy_count, audio_path, status, model_id, audio_bytes";
+    "id, created_at, transcript, language, mode_name, app_name, website, duration_secs, words, favorite, copy_count, audio_path, status, model_id, audio_bytes, transcription_ms, extra_json";
 
 /// Persist the WAV + a `transcribing` row BEFORE transcription is attempted, so
 /// a recording is never lost to a network error. Returns (id, audio_path).
@@ -236,13 +282,23 @@ pub fn insert_pending(
     Ok((id, path_str))
 }
 
-/// Update a row with the transcription result and final status.
-pub fn update_result(db: &HistoryDb, id: i64, transcript: &str, language: &str, status: &str) {
+/// Update a row with the transcription result, final status, how long the
+/// transcription took (ms from recording-stop), and any structured `extra_json`
+/// (`{ words, speakers }`; None leaves the column as-is/null).
+pub fn update_result(
+    db: &HistoryDb,
+    id: i64,
+    transcript: &str,
+    language: &str,
+    status: &str,
+    transcription_ms: i64,
+    extra_json: Option<&str>,
+) {
     let conn = db.0.lock().unwrap();
     let words = transcript.split_whitespace().count() as i64;
     let _ = conn.execute(
-        "UPDATE recordings SET transcript = ?2, language = ?3, words = ?4, status = ?5 WHERE id = ?1",
-        params![id, transcript, language, words, status],
+        "UPDATE recordings SET transcript = ?2, language = ?3, words = ?4, status = ?5, transcription_ms = ?6, extra_json = ?7 WHERE id = ?1",
+        params![id, transcript, language, words, status, transcription_ms, extra_json],
     );
 }
 
@@ -574,11 +630,12 @@ mod tests {
         .unwrap();
         let db = HistoryDb(Mutex::new(conn));
         assert_eq!(list_by_status(&db, "transcribing").len(), 1);
-        update_result(&db, id, "done text", "en", "done");
+        update_result(&db, id, "done text", "en", "done", 1234, None);
         assert!(list_by_status(&db, "transcribing").is_empty());
         let item = get(&db, id).unwrap();
         assert_eq!(item.status, "done");
         assert_eq!(item.words, 2);
+        assert_eq!(item.transcription_ms, 1234);
         set_status(&db, id, "failed");
         assert_eq!(list_by_status(&db, "failed").len(), 1);
     }

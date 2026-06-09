@@ -34,6 +34,9 @@ pub fn on_recording_finished(
 ) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        // Wall-clock starts at recording-stop (this is invoked right after capture
+        // finishes), so it measures "time from shortcut release to transcript ready".
+        let started = std::time::Instant::now();
         let pcm16 = resample::resample_to_pcm16_24k(&samples, rate);
         let lang_label = ctx.language.clone().unwrap_or_else(|| "auto".into());
         let mode_name = ctx.mode_name.clone().unwrap_or_else(|| "—".into());
@@ -64,7 +67,7 @@ pub fn on_recording_finished(
             None => transcribe_file(&app, &ctx, &path).await,
         };
 
-        finalize(&app, id, &ctx, result);
+        finalize(&app, id, &ctx, result, started.elapsed().as_millis() as i64);
     });
 }
 
@@ -73,7 +76,7 @@ async fn transcribe_file(
     app: &AppHandle,
     ctx: &RecordingContext,
     path: &str,
-) -> Result<String, String> {
+) -> Result<file_transcribe::TranscriptOutput, String> {
     let reg = registry::effective(app);
     let model = reg
         .model_by_id(&ctx.model_id)
@@ -87,12 +90,28 @@ async fn transcribe_file(
 
 /// Record the transcription outcome on the row, deliver the text, and settle the
 /// HUD. Always leaves the row in a coherent state (done/failed/needs_transcription).
-fn finalize(app: &AppHandle, id: i64, ctx: &RecordingContext, result: Result<String, String>) {
+fn finalize(
+    app: &AppHandle,
+    id: i64,
+    ctx: &RecordingContext,
+    result: Result<file_transcribe::TranscriptOutput, String>,
+    transcription_ms: i64,
+) {
     let db = app.state::<HistoryDb>();
     match result {
-        Ok(text) if !text.trim().is_empty() => {
+        Ok(out) if !out.text.trim().is_empty() => {
+            let extra = out.extra_json();
+            let text = out.text;
             let language = crate::lang_detect::resolve(ctx.language.as_deref(), &text);
-            history::update_result(&db, id, &text, &language, "done");
+            history::update_result(
+                &db,
+                id,
+                &text,
+                &language,
+                "done",
+                transcription_ms,
+                extra.as_deref(),
+            );
             log::info!("transcript (id {id}): {} chars", text.len());
             let _ = app.emit(
                 events::TRANSCRIPT_FINAL,
@@ -109,7 +128,7 @@ fn finalize(app: &AppHandle, id: i64, ctx: &RecordingContext, result: Result<Str
         Ok(_) => {
             // Completed with no speech — a valid, done recording (empty text).
             let language = ctx.language.clone().unwrap_or_else(|| "auto".into());
-            history::update_result(&db, id, "", &language, "done");
+            history::update_result(&db, id, "", &language, "done", transcription_ms, None);
             let _ = app.emit(events::HISTORY_CHANGED, ());
             hud::hide_hud(app);
         }

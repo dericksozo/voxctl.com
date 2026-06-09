@@ -23,7 +23,7 @@ use tokio_tungstenite::{
     tungstenite::{client::IntoClientRequest, Message},
 };
 
-use crate::file_transcribe::TranscribeOptions;
+use crate::file_transcribe::{self, SpeakerSeg, TranscribeOptions, TranscriptOutput, WordStamp};
 use crate::transcription::RealtimeSession;
 
 const BASE: &str = "wss://api.x.ai/v1/stt";
@@ -35,7 +35,7 @@ const READ_TIMEOUT: Duration = Duration::from_secs(45);
 /// session's `sender()`; the final transcript is awaited with `finish()`.
 pub fn open_session(key: String, opts: TranscribeOptions) -> RealtimeSession {
     let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Vec<i16>>();
-    let (done_tx, done_rx) = oneshot::channel::<Result<String, String>>();
+    let (done_tx, done_rx) = oneshot::channel::<Result<TranscriptOutput, String>>();
     tauri::async_runtime::spawn(async move {
         let result = run_session(&key, &opts, audio_rx).await;
         let _ = done_tx.send(result);
@@ -99,29 +99,53 @@ fn pcm16_le(samples: &[i16]) -> Vec<u8> {
 struct Accumulator {
     committed: Vec<String>,
     preview_tail: String,
+    /// Best-effort structured extras (present only when diarize/word-timing data
+    /// rides along on the events). Empty otherwise → no extra tabs.
+    speakers: Vec<SpeakerSeg>,
+    words: Vec<WordStamp>,
 }
 
 impl Accumulator {
     /// Observe a partial. `speech_final` segments are the refined utterance and
     /// are committed; chunk-finals and interims only update the live preview.
-    fn observe(&mut self, text: &str, speech_final: bool) {
+    /// Returns true when a new refined utterance was committed.
+    fn observe(&mut self, text: &str, speech_final: bool) -> bool {
         let text = text.trim();
         if speech_final {
-            if !text.is_empty() && self.committed.last().map(String::as_str) != Some(text) {
+            let is_new =
+                !text.is_empty() && self.committed.last().map(String::as_str) != Some(text);
+            if is_new {
                 self.committed.push(text.to_string());
             }
             self.preview_tail.clear();
+            is_new
         } else {
             self.preview_tail = text.to_string();
+            false
         }
     }
 
-    fn done(&mut self, text: &str) {
+    /// Pull any speaker/word data off a just-committed `speech_final` event. Field
+    /// names are best-effort (verify against the live API); absence is harmless.
+    fn capture_structured(&mut self, ev: &Value) {
+        let text = self.committed.last().cloned().unwrap_or_default();
+        if let Some(speaker) = file_transcribe::speaker_field(ev) {
+            self.speakers.push(SpeakerSeg {
+                speaker,
+                text,
+                start: file_transcribe::num_field(ev, &["start", "start_time", "from"]),
+                end: file_transcribe::num_field(ev, &["end", "end_time", "to"]),
+            });
+        }
+        self.words.extend(file_transcribe::parse_words(ev));
+    }
+
+    fn done(&mut self, ev: &Value, text: &str) {
         // transcript.done is usually empty (a completion signal). If it ever
         // carries a tail, treat it as a final utterance; otherwise keep the
         // preview tail as a fallback for audio that stopped mid-utterance.
-        if !text.trim().is_empty() {
-            self.observe(text, true);
+        if !text.trim().is_empty() && self.observe(text, true) {
+            self.capture_structured(ev);
         }
     }
 
@@ -134,8 +158,17 @@ impl Accumulator {
         parts.join(" ").trim().to_string()
     }
 
+    #[cfg(test)]
     fn final_text(&self) -> String {
         self.joined()
+    }
+
+    fn final_output(&self) -> TranscriptOutput {
+        TranscriptOutput {
+            text: self.joined(),
+            words: self.words.clone(),
+            speakers: self.speakers.clone(),
+        }
     }
 }
 
@@ -176,12 +209,14 @@ fn handle_frame(
                 .get("speech_final")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            acc.observe(text, speech_final);
+            if acc.observe(text, speech_final) {
+                acc.capture_structured(&v);
+            }
             Ok(Flow::Continue)
         }
         "transcript.done" => {
             let text = v.get("text").and_then(Value::as_str).unwrap_or("");
-            acc.done(text);
+            acc.done(&v, text);
             Ok(Flow::Done)
         }
         "error" => {
@@ -199,7 +234,7 @@ async fn run_session(
     key: &str,
     opts: &TranscribeOptions,
     mut audio_rx: mpsc::UnboundedReceiver<Vec<i16>>,
-) -> Result<String, String> {
+) -> Result<TranscriptOutput, String> {
     let mut req = build_url(opts)
         .into_client_request()
         .map_err(|e| format!("xai request build: {e}"))?;
@@ -240,9 +275,9 @@ async fn run_session(
                 match handle_frame(frame, &mut acc)? {
                     Flow::Done => {
                         let _ = write.send(Message::Close(None)).await;
-                        return Ok(acc.final_text());
+                        return Ok(acc.final_output());
                     }
-                    Flow::Closed => return Ok(acc.final_text()),
+                    Flow::Closed => return Ok(acc.final_output()),
                     Flow::Continue => {}
                 }
             }
@@ -253,17 +288,19 @@ async fn run_session(
     let drain = async {
         loop {
             match handle_frame(read.next().await, &mut acc)? {
-                Flow::Done | Flow::Closed => return Ok::<String, String>(acc.final_text()),
+                Flow::Done | Flow::Closed => {
+                    return Ok::<TranscriptOutput, String>(acc.final_output())
+                }
                 Flow::Continue => {}
             }
         }
     };
     let result = timeout(READ_TIMEOUT, drain).await.unwrap_or_else(|_| {
-        let t = acc.final_text();
-        if t.is_empty() {
+        let out = acc.final_output();
+        if out.text.is_empty() {
             Err("xai transcription timed out".into())
         } else {
-            Ok(t)
+            Ok(out)
         }
     });
     let _ = write.send(Message::Close(None)).await;
@@ -312,7 +349,7 @@ mod tests {
         a.observe("today i'm testing vox control.", false); // chunk-final (rough) as preview
         assert_eq!(a.final_text(), "today i'm testing vox control."); // rough tail before any final
         a.observe("Today I'm testing VoxCTL.", true); // refined utterance final
-        a.done("");
+        a.done(&json!({}), "");
         assert_eq!(a.final_text(), "Today I'm testing VoxCTL.");
     }
 
@@ -340,7 +377,7 @@ mod tests {
         let mut a = Accumulator::default();
         a.observe("Committed one.", true);
         a.observe("unfinished tail", false);
-        a.done(""); // empty done must not drop the tail
+        a.done(&json!({}), ""); // empty done must not drop the tail
         assert_eq!(a.final_text(), "Committed one. unfinished tail");
     }
 
@@ -365,11 +402,21 @@ mod tests {
             tx.send(chunk.to_vec()).unwrap();
         }
         drop(tx);
-        let opts = TranscribeOptions::default();
+        let opts = TranscribeOptions {
+            diarization: true,
+            word_timestamps: true,
+            ..Default::default()
+        };
         let result = rt.block_on(run_session(&key, &opts, rx));
         eprintln!("FINAL: {result:?}");
         assert!(result.is_ok(), "xai live failed: {result:?}");
-        assert!(!result.unwrap().trim().is_empty(), "empty transcript");
+        let out = result.unwrap();
+        eprintln!(
+            "  live: {} words, {} speaker segments",
+            out.words.len(),
+            out.speakers.len()
+        );
+        assert!(!out.text.trim().is_empty(), "empty transcript");
     }
 
     /// Minimal WAV (PCM16) reader: find the `data` chunk and read i16 LE samples.

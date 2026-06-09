@@ -17,6 +17,7 @@ import { t } from "./i18n";
 import { EVT, type BackendError, type ModeChanged, type RecState } from "./lib/events";
 import {
   getActiveMode,
+  getDefaultModeId,
   getPermissions,
   getRegistry,
   listHistory,
@@ -27,8 +28,6 @@ import type { ActiveMode, HistoryItem, Mode, PermissionStatus } from "./lib/type
 import {
   anyKeyValidated,
   EMPTY_PROVIDER_STATUS,
-  modelById,
-  providerValidated,
   type ProviderStatus,
   type Registry,
 } from "./lib/registry";
@@ -53,6 +52,7 @@ export default function App() {
   const [audioStopToken, setAudioStopToken] = useState(0);
 
   const [modes, setModes] = useState<Mode[]>([]);
+  const [defaultModeId, setDefaultModeId] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [activeMode, setActiveMode] = useState<ActiveMode | null>(null);
   const [registry, setRegistry] = useState<Registry | null>(null);
@@ -70,6 +70,7 @@ export default function App() {
   const refreshModes = useCallback(() => {
     listModes().then(setModes).catch(() => {});
     getActiveMode().then(setActiveMode).catch(() => {});
+    getDefaultModeId().then(setDefaultModeId).catch(() => {});
   }, []);
   const refreshHistory = useCallback(() => {
     listHistory().then(setHistory).catch(() => {});
@@ -105,9 +106,6 @@ export default function App() {
     providersReady &&
     permsReady &&
     (!config.onboardingCompleted || !perms.microphone || !perms.accessibility || !apiKeySet);
-  // SET status: the active mode's model has a validated key (you can dictate now).
-  const activeModel = activeMode ? modelById(registry, activeMode.mode.model) : undefined;
-  const modeUsable = !!activeModel && providerValidated(providers, activeModel.provider);
 
   // The section header/blurb only applies inside Settings.
   useEffect(() => {
@@ -132,7 +130,6 @@ export default function App() {
     document.documentElement.style.setProperty("--head", `"${theme.headerFont}", sans-serif`);
   }, [theme]);
 
-  const activeModeName = activeMode?.mode.name ?? "—";
   const minutes = Math.round(history.reduce((s, h) => s + h.durationSecs, 0) / 60);
 
   const META: Record<string, string> = {
@@ -237,6 +234,7 @@ export default function App() {
           <ModesPanel
             modes={modes}
             activeModeId={activeMode?.mode.id ?? null}
+            defaultModeId={defaultModeId}
             registry={registry}
             providers={providers}
             onChange={refreshModes}
@@ -279,13 +277,7 @@ export default function App() {
             VOXCTL
           </h1>
         </div>
-        <div className="trace">
-          <span className="trace-line" />
-          <span className="trace-step" />
-          <span className="trace-line short" />
-          <span className="trace-dot" />
-        </div>
-        <div className="head-right">
+        <div className="head-center">
           {permsMissing ? (
             <button type="button" className="mode-pill warn" onClick={() => switchTo("settings")}>
               {t("perm.title")}
@@ -293,13 +285,12 @@ export default function App() {
           ) : (
             <ModeSwitcher modes={modes} active={activeMode} onChange={refreshModes} />
           )}
-          <div className="head-stat">
-            <StatDot label={t("header.link")} ok={perms.accessibility} onClick={() => switchTo("settings")} />
-            {" · "}
-            <StatDot label={t("header.key")} ok={apiKeySet} onClick={() => switchTo("settings")} />
-            {" · "}
-            <StatDot label={t("header.set")} ok={modeUsable} onClick={() => switchTo("settings")} />
-          </div>
+        </div>
+        <div className="trace">
+          <span className="trace-line" />
+          <span className="trace-step" />
+          <span className="trace-line short" />
+          <span className="trace-dot" />
         </div>
       </header>
 
@@ -375,16 +366,6 @@ export default function App() {
           <span className="gr-k">{t("footer.input")}</span>
           <VolumeMeter count={12} />
         </div>
-        <div className="gr">
-          <span className="gr-k">{t("footer.mode")}</span>
-          <span className="gr-v on-pink">▸ {activeModeName}</span>
-        </div>
-        <div className="gr">
-          <span className="gr-k">{t("footer.sfx")}</span>
-          <span className={"gr-v" + (config.sfxEnabled ? " on-pink" : "")}>
-            {config.sfxEnabled ? "ON" : "SILENT"}
-          </span>
-        </div>
         <div className="gr gr-clock">
           <span className="gr-k">{t("footer.utc")}</span>
           <Clock />
@@ -401,15 +382,5 @@ export default function App() {
 
       {import.meta.env.DEV ? <TweaksPanel theme={theme} onChange={setTheme} /> : null}
     </div>
-  );
-}
-
-/** A clickable header status indicator (LINK / KEY / SET). Red items jump to
- *  their fix in Settings. */
-function StatDot({ label, ok, onClick }: { label: string; ok: boolean; onClick: () => void }) {
-  return (
-    <button type="button" className="linklike" onClick={onClick}>
-      {label} <span className={ok ? "ok" : "bad"}>{ok ? "✓" : "·"}</span>
-    </button>
   );
 }

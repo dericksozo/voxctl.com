@@ -10,6 +10,7 @@
 use std::time::Duration;
 
 use base64::Engine;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::registry::ModelRecord;
@@ -35,11 +36,196 @@ impl TranscribeOptions {
     }
 }
 
+/// One word with its timing (and speaker, when diarization is on). `speaker` is a
+/// free-form label ("0", "SPEAKER_1", …) since providers differ.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WordStamp {
+    pub word: String,
+    pub start: f64,
+    pub end: f64,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub speaker: Option<String>,
+}
+
+/// A contiguous span attributed to one speaker (diarization output).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeakerSeg {
+    pub speaker: String,
+    pub text: String,
+    pub start: f64,
+    pub end: f64,
+}
+
+/// A transcription result: always the plain `text`, plus optional structured data
+/// (`words`, `speakers`) when the model/mode produced it. Both extra vecs are
+/// empty for text-only providers/paths.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptOutput {
+    pub text: String,
+    #[serde(default)]
+    pub words: Vec<WordStamp>,
+    #[serde(default)]
+    pub speakers: Vec<SpeakerSeg>,
+}
+
+impl TranscriptOutput {
+    /// Plain-text only result (the common case).
+    pub fn text_only(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            ..Default::default()
+        }
+    }
+
+    /// JSON `{ "words": …, "speakers": … }` for persistence, or None when there is
+    /// no structured data to store.
+    pub fn extra_json(&self) -> Option<String> {
+        if self.words.is_empty() && self.speakers.is_empty() {
+            return None;
+        }
+        serde_json::to_string(&json!({ "words": self.words, "speakers": self.speakers })).ok()
+    }
+}
+
 #[async_trait::async_trait]
 pub trait FileTranscriber: Send + Sync {
     /// Transcribe a complete WAV (PCM16) container.
-    async fn transcribe_file(&self, wav: &[u8], opts: &TranscribeOptions)
-        -> Result<String, String>;
+    async fn transcribe_file(
+        &self,
+        wav: &[u8],
+        opts: &TranscribeOptions,
+    ) -> Result<TranscriptOutput, String>;
+}
+
+// ---- Shared defensive parsing of provider word/speaker JSON ----
+// Field names differ between providers (and may change), so every accessor tries
+// a few plausible keys and tolerates absence. If nothing matches, the relevant
+// tab simply won't appear in the UI.
+
+pub(crate) fn num_field(v: &Value, keys: &[&str]) -> f64 {
+    for k in keys {
+        if let Some(n) = v.get(*k).and_then(Value::as_f64) {
+            return n;
+        }
+    }
+    0.0
+}
+
+pub(crate) fn speaker_field(v: &Value) -> Option<String> {
+    for k in ["speaker", "speaker_id", "speaker_label", "channel"] {
+        if let Some(val) = v.get(k) {
+            if let Some(s) = val.as_str() {
+                return Some(s.to_string());
+            }
+            if let Some(n) = val.as_i64() {
+                return Some(n.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn parse_word(w: &Value) -> Option<WordStamp> {
+    let word = w
+        .get("word")
+        .or_else(|| w.get("text"))
+        .and_then(Value::as_str)?
+        .trim()
+        .to_string();
+    if word.is_empty() {
+        return None;
+    }
+    Some(WordStamp {
+        word,
+        start: num_field(w, &["start", "start_time", "from"]),
+        end: num_field(w, &["end", "end_time", "to"]),
+        speaker: speaker_field(w),
+    })
+}
+
+/// Word stamps from a top-level `words` array, or gathered from `segments[].words`
+/// (inheriting each segment's speaker when a word lacks its own).
+pub(crate) fn parse_words(v: &Value) -> Vec<WordStamp> {
+    if let Some(ws) = v.get("words").and_then(Value::as_array) {
+        return ws.iter().filter_map(parse_word).collect();
+    }
+    let Some(segs) = v.get("segments").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for s in segs {
+        let seg_spk = speaker_field(s);
+        if let Some(ws) = s.get("words").and_then(Value::as_array) {
+            for w in ws {
+                if let Some(mut stamp) = parse_word(w) {
+                    if stamp.speaker.is_none() {
+                        stamp.speaker = seg_spk.clone();
+                    }
+                    out.push(stamp);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Speaker segments from a `segments` array (each `{ speaker, text, start, end }`).
+fn parse_segment_speakers(v: &Value) -> Vec<SpeakerSeg> {
+    let Some(segs) = v.get("segments").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    segs.iter()
+        .filter_map(|s| {
+            let speaker = speaker_field(s)?;
+            let text = s.get("text").and_then(Value::as_str).unwrap_or("").trim();
+            if text.is_empty() {
+                return None;
+            }
+            Some(SpeakerSeg {
+                speaker,
+                text: text.to_string(),
+                start: num_field(s, &["start", "start_time", "from"]),
+                end: num_field(s, &["end", "end_time", "to"]),
+            })
+        })
+        .collect()
+}
+
+/// Build speaker segments by merging runs of consecutive same-speaker words — the
+/// fallback when a provider gives per-word speakers but no segment list.
+fn group_words_to_speakers(words: &[WordStamp]) -> Vec<SpeakerSeg> {
+    let mut out: Vec<SpeakerSeg> = Vec::new();
+    for w in words {
+        let Some(spk) = &w.speaker else { continue };
+        match out.last_mut() {
+            Some(last) if &last.speaker == spk => {
+                last.text.push(' ');
+                last.text.push_str(&w.word);
+                last.end = w.end;
+            }
+            _ => out.push(SpeakerSeg {
+                speaker: spk.clone(),
+                text: w.word.clone(),
+                start: w.start,
+                end: w.end,
+            }),
+        }
+    }
+    out
+}
+
+/// Words + speakers from a provider response: segment speakers when present, else
+/// derived from per-word speakers.
+fn parse_structured(v: &Value) -> (Vec<WordStamp>, Vec<SpeakerSeg>) {
+    let words = parse_words(v);
+    let mut speakers = parse_segment_speakers(v);
+    if speakers.is_empty() {
+        speakers = group_words_to_speakers(&words);
+    }
+    (words, speakers)
 }
 
 /// Build the right file transcriber for a model's provider. Returns None for a
@@ -86,7 +272,7 @@ impl FileTranscriber for OpenAiFileTranscriber {
         &self,
         wav: &[u8],
         opts: &TranscribeOptions,
-    ) -> Result<String, String> {
+    ) -> Result<TranscriptOutput, String> {
         // Only whisper-1 returns word timestamps, and only via verbose_json; the
         // gpt-4o transcribe models support json only.
         let want_words = opts.word_timestamps;
@@ -120,10 +306,22 @@ impl FileTranscriber for OpenAiFileTranscriber {
             return Err(format!("openai transcribe {status}: {}", truncate(&body)));
         }
         let v: Value = serde_json::from_str(&body).map_err(|e| format!("parse: {e}"))?;
-        Ok(v.get("text")
+        let text = v
+            .get("text")
             .and_then(Value::as_str)
             .unwrap_or("")
-            .to_string())
+            .to_string();
+        // whisper-1 has no diarization; only word timestamps via verbose_json.
+        let words = if want_words {
+            parse_words(&v)
+        } else {
+            Vec::new()
+        };
+        Ok(TranscriptOutput {
+            text,
+            words,
+            speakers: Vec::new(),
+        })
     }
 }
 
@@ -139,7 +337,7 @@ impl FileTranscriber for XaiTranscriber {
         &self,
         wav: &[u8],
         opts: &TranscribeOptions,
-    ) -> Result<String, String> {
+    ) -> Result<TranscriptOutput, String> {
         // Text fields first; `file` MUST be the last part (per xAI docs).
         let mut form = reqwest::multipart::Form::new();
         if let Some(l) = opts.lang() {
@@ -153,6 +351,12 @@ impl FileTranscriber for XaiTranscriber {
         }
         if opts.multichannel {
             form = form.text("multichannel", "true");
+        }
+        // Ask for word-level timing when the mode wants it. Param name is
+        // best-effort (verify against the live API); the parser tolerates either
+        // a `words` array or `segments[].words`, so an unknown shape is harmless.
+        if opts.word_timestamps {
+            form = form.text("timestamp_granularities", "word");
         }
         for kw in &opts.keywords {
             form = form.text("keyterm", kw.clone());
@@ -172,10 +376,26 @@ impl FileTranscriber for XaiTranscriber {
             return Err(format!("xai transcribe {status}: {}", truncate(&body)));
         }
         let v: Value = serde_json::from_str(&body).map_err(|e| format!("parse: {e}"))?;
-        Ok(v.get("text")
+        let text = v
+            .get("text")
             .and_then(Value::as_str)
             .unwrap_or("")
-            .to_string())
+            .to_string();
+        let (words, speakers) = parse_structured(&v);
+        Ok(TranscriptOutput {
+            text,
+            // Only surface what the mode asked for, even if the API returns more.
+            words: if opts.word_timestamps {
+                words
+            } else {
+                Vec::new()
+            },
+            speakers: if opts.diarization {
+                speakers
+            } else {
+                Vec::new()
+            },
+        })
     }
 }
 
@@ -192,7 +412,7 @@ impl FileTranscriber for GeminiTranscriber {
         &self,
         wav: &[u8],
         opts: &TranscribeOptions,
-    ) -> Result<String, String> {
+    ) -> Result<TranscriptOutput, String> {
         let b64 = base64::engine::general_purpose::STANDARD.encode(wav);
         let mut prompt = String::from(
             "Transcribe this audio. Return only the transcript text, with no commentary.",
@@ -233,7 +453,7 @@ impl FileTranscriber for GeminiTranscriber {
             return Err(format!("gemini transcribe {status}: {}", truncate(&body)));
         }
         let v: Value = serde_json::from_str(&body).map_err(|e| format!("parse: {e}"))?;
-        Ok(extract_gemini_text(&v))
+        Ok(TranscriptOutput::text_only(extract_gemini_text(&v)))
     }
 }
 
@@ -302,6 +522,71 @@ mod tests {
         assert_eq!(extract_gemini_text(&v), "hello world");
     }
 
+    #[test]
+    fn parse_words_from_top_level_array() {
+        let v = json!({
+            "text": "hello world",
+            "words": [
+                { "word": "hello", "start": 0.0, "end": 0.4 },
+                { "word": "world", "start": 0.4, "end": 0.9, "speaker": 1 }
+            ]
+        });
+        let (words, _) = parse_structured(&v);
+        assert_eq!(words.len(), 2);
+        assert_eq!(words[0].word, "hello");
+        assert_eq!(words[1].speaker.as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn parse_speakers_from_segments() {
+        let v = json!({
+            "text": "hi there",
+            "segments": [
+                { "speaker": "0", "text": "hi", "start": 0.0, "end": 0.5 },
+                { "speaker": "1", "text": "there", "start": 0.6, "end": 1.0 }
+            ]
+        });
+        let (_, speakers) = parse_structured(&v);
+        assert_eq!(speakers.len(), 2);
+        assert_eq!(speakers[0].speaker, "0");
+        assert_eq!(speakers[1].text, "there");
+    }
+
+    #[test]
+    fn speakers_grouped_from_per_word_speaker() {
+        // No segment list, but words carry speakers → merge consecutive runs.
+        let v = json!({
+            "words": [
+                { "word": "one", "start": 0.0, "end": 0.2, "speaker": "A" },
+                { "word": "two", "start": 0.2, "end": 0.4, "speaker": "A" },
+                { "word": "three", "start": 0.4, "end": 0.6, "speaker": "B" }
+            ]
+        });
+        let (_, speakers) = parse_structured(&v);
+        assert_eq!(speakers.len(), 2);
+        assert_eq!(speakers[0].speaker, "A");
+        assert_eq!(speakers[0].text, "one two");
+        assert_eq!(speakers[1].text, "three");
+    }
+
+    #[test]
+    fn extra_json_roundtrips_and_is_none_when_empty() {
+        assert!(TranscriptOutput::text_only("hi").extra_json().is_none());
+        let out = TranscriptOutput {
+            text: "hi".into(),
+            words: vec![WordStamp {
+                word: "hi".into(),
+                start: 0.0,
+                end: 0.3,
+                speaker: None,
+            }],
+            speakers: vec![],
+        };
+        let json = out.extra_json().expect("some json");
+        assert!(json.contains("\"words\""));
+        assert!(json.contains("\"hi\""));
+    }
+
     /// Live file-transcription smoke test per provider. Gated on env so it never
     /// runs in normal `cargo test`. Provide a 16k+ mono WAV and keys:
     ///   VOXCTL_TEST_WAV=/tmp/x.wav VOXCTL_TEST_OPENAI_KEY=… VOXCTL_TEST_XAI_KEY=… \
@@ -330,6 +615,13 @@ mod tests {
             };
             let model = reg.model_by_id(model_id).unwrap();
             let tr = file_transcriber_for(model, key).unwrap();
+            // Ask for the structured extras so the live dump reveals each provider's
+            // word/speaker JSON shape (used to confirm the defensive parser).
+            let opts = TranscribeOptions {
+                word_timestamps: true,
+                diarization: true,
+                ..opts.clone()
+            };
             let res = rt.block_on(tr.transcribe_file(&wav, &opts));
             eprintln!("{model_id}: {res:?}");
             // A billing/quota error means auth + request shape are correct but the
@@ -342,10 +634,13 @@ mod tests {
                 }
             }
             assert!(res.is_ok(), "{model_id} failed: {res:?}");
-            assert!(
-                !res.unwrap().trim().is_empty(),
-                "{model_id} empty transcript"
+            let out = res.unwrap();
+            eprintln!(
+                "  {model_id}: {} words, {} speaker segments",
+                out.words.len(),
+                out.speakers.len()
             );
+            assert!(!out.text.trim().is_empty(), "{model_id} empty transcript");
         }
     }
 }

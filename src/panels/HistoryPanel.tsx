@@ -2,19 +2,16 @@ import "../styles/panels/home.css";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { t } from "../i18n";
-import { langLabel } from "../lib/languages";
-import {
-  deleteRecording,
-  deleteRecordings,
-  incrementCopy,
-  retranscribe,
-  toggleFavorite,
-} from "../lib/ipc";
+import { deleteRecording, incrementCopy, retranscribe } from "../lib/ipc";
 import type { HistoryItem, Mode } from "../lib/types";
 import { estimateCost, formatCost, modelById, type Registry } from "../lib/registry";
 import { ProviderLogo } from "../components/ProviderLogo";
 
 const pad = (n: number) => String(n).padStart(2, "0");
+
+/** How many transcript cards to render per batch (grown on scroll). Keeps the
+ *  DOM small so returning to Home with a large archive stays snappy. */
+const PAGE_SIZE = 30;
 
 function dayLabel(ts: number): string {
   const d = new Date(ts);
@@ -32,6 +29,26 @@ const timeLabel = (ts: number) => {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 const durLabel = (s: number) => `${Math.floor(s / 60)}:${pad(Math.round(s % 60))}`;
+/** How long the transcription took (ms → "x.xs"), or "" when not measured. */
+const tookLabel = (ms: number) => (ms > 0 ? `${(ms / 1000).toFixed(1)}s` : "");
+/** A word/segment start time as mm:ss.s. */
+const tcLabel = (s: number) => `${pad(Math.floor(s / 60))}:${(s % 60).toFixed(1).padStart(4, "0")}`;
+/** Human speaker label: numeric ids become "SPEAKER n", others pass through. */
+const speakerLabel = (s: string) => (/^\d+$/.test(s) ? `SPEAKER ${s}` : s.toUpperCase());
+
+/** Which expanded-card tab is shown. */
+type TabKey = "text" | "stamps" | "speakers";
+
+/** The active tab's content formatted for the clipboard. */
+function copyTextFor(item: HistoryItem, tab: TabKey): string {
+  if (tab === "stamps") {
+    return item.wordStamps.map((w) => `[${tcLabel(w.start)}] ${w.word}`).join("\n");
+  }
+  if (tab === "speakers") {
+    return item.speakers.map((s) => `${speakerLabel(s.speaker)}: ${s.text}`).join("\n\n");
+  }
+  return item.transcript;
+}
 const fmtCount = (n: number) => (n >= 10 ? "10+" : String(n));
 
 function fmtBytes(n: number): string {
@@ -159,21 +176,6 @@ const IcoAlert = ({ size = 38 }: IcoProps) => (
     <path d="M12 9v4M12 17h.01" />
   </Svg>
 );
-const IcoStar = ({ size = 15, on = false }: IcoProps & { on?: boolean }) => (
-  <svg
-    width={size}
-    height={size}
-    viewBox="0 0 24 24"
-    fill={on ? "currentColor" : "none"}
-    stroke="currentColor"
-    strokeWidth={1.6}
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
-    <path d="M12 2.5l2.9 6.2 6.6.7-4.9 4.5 1.3 6.6L12 18.2 6.1 21l1.3-6.6L2.5 9.4l6.6-.7z" />
-  </svg>
-);
 
 /** Provider brand chip with mode tooltip (reuses the shared `.prov` class). */
 function ProviderChip({ provider, mode, size = 15 }: { provider?: string; mode?: string; size?: number }) {
@@ -207,19 +209,18 @@ export function HistoryPanel({
   stopToken?: number;
 }) {
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [tab, setTab] = useState<TabKey>("text");
   const [copied, setCopied] = useState<number | null>(null);
   const [playing, setPlaying] = useState<number | null>(null);
   const [rerunFor, setRerunFor] = useState<number | null>(null);
   const [confirmDel, setConfirmDel] = useState<number | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
-  // Search / filter
+  // Search — the only list control on Home.
   const [query, setQuery] = useState("");
-  const [appFilter, setAppFilter] = useState("");
-  const [langFilter, setLangFilter] = useState("");
-  const [favOnly, setFavOnly] = useState(false);
-  // Bulk selection
-  const [selectMode, setSelectMode] = useState(false);
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  // Batch rendering: render a page of cards and grow as the sentinel scrolls in.
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
   // No error signal exists in props today; default false. RETRY calls onChange().
   // Surfaced for the verification phase to wire to a real archive-read error.
   const [archiveError] = useState(false);
@@ -245,16 +246,20 @@ export function HistoryPanel({
     if (stopToken > 0) stopPlayback();
   }, [stopPlayback, stopToken]);
 
-  // Collapsing a card resets its transient per-card UI.
+  // A new search starts the window over from the first page.
+  useEffect(() => setVisibleCount(PAGE_SIZE), [query]);
+
+  // Collapsing a card resets its transient per-card UI (incl. the active tab).
   useEffect(() => {
     setRerunFor(null);
     setConfirmDel(null);
+    setTab("text");
   }, [expanded]);
 
-  async function doCopy(e: React.MouseEvent, item: HistoryItem) {
+  async function doCopy(e: React.MouseEvent, item: HistoryItem, text?: string) {
     e.stopPropagation();
     try {
-      await navigator.clipboard.writeText(item.transcript);
+      await navigator.clipboard.writeText(text ?? item.transcript);
     } catch {
       /* ignore */
     }
@@ -301,18 +306,10 @@ export function HistoryPanel({
     }
   }
 
-  async function doFavorite(e: React.MouseEvent, item: HistoryItem) {
-    e.stopPropagation();
-    try {
-      await toggleFavorite(item.id);
-      onChange();
-    } catch {
-      /* ignore */
-    }
-  }
-
   async function doDelete(e: React.MouseEvent, item: HistoryItem) {
     e.stopPropagation();
+    // Stop playback first: the deleted WAV must not keep playing from memory.
+    if (audioRef.current?.id === item.id) stopPlayback();
     try {
       await deleteRecording(item.id);
       onChange();
@@ -336,27 +333,6 @@ export function HistoryPanel({
     }
   }
 
-  function toggleSelect(id: number) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  async function deleteSelected() {
-    if (selected.size === 0) return;
-    try {
-      await deleteRecordings([...selected]);
-      onChange();
-    } catch {
-      /* ignore */
-    }
-    setSelected(new Set());
-    setSelectMode(false);
-  }
-
   // ---- readiness signal: null/undefined history = still loading ----
   const loading = history == null;
   const items: HistoryItem[] = history ?? [];
@@ -365,15 +341,8 @@ export function HistoryPanel({
   const fileModes = modes.filter((m) => modelById(registry, m.model)?.canFile);
   const modeLabel = (m: Mode) => `${m.name} · ${modelById(registry, m.model)?.label ?? m.model}`;
 
-  // Distinct apps/languages present, for the filter dropdowns.
-  const apps = [...new Set(items.map((h) => h.appName || h.website).filter(Boolean))] as string[];
-  const langs = [...new Set(items.map((h) => h.language).filter(Boolean))];
-
   const q = query.trim().toLowerCase();
   const filtered = items.filter((h) => {
-    if (favOnly && !h.favorite) return false;
-    if (appFilter && (h.appName || h.website || "") !== appFilter) return false;
-    if (langFilter && h.language !== langFilter) return false;
     if (q) {
       const hay = `${h.transcript} ${h.appName ?? ""} ${h.website ?? ""} ${h.modeName}`.toLowerCase();
       if (!hay.includes(q)) return false;
@@ -404,13 +373,33 @@ export function HistoryPanel({
   const totalHours = (totalSecs / 3600).toFixed(1);
   const spendLabel = totalCost > 0 ? formatCost(totalCost) : "$0.00";
 
+  // Window the filtered list, then group the visible slice by day.
+  const shown = filtered.slice(0, visibleCount);
+  const hasMore = visibleCount < filtered.length;
   const groups: { day: string; items: HistoryItem[] }[] = [];
-  for (const item of filtered) {
+  for (const item of shown) {
     const day = dayLabel(item.createdAt);
     const g = groups.find((x) => x.day === day);
     if (g) g.items.push(item);
     else groups.push({ day, items: [item] });
   }
+
+  // Grow the window as the bottom sentinel scrolls into view. The scroll root is
+  // the panel-body; re-observing on each bump lets a tall viewport keep filling
+  // until the sentinel is pushed out of view (or nothing is left).
+  useEffect(() => {
+    const root = scrollRef.current;
+    const sentinel = sentinelRef.current;
+    if (!root || !sentinel) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((en) => en.isIntersecting)) setVisibleCount((n) => n + PAGE_SIZE);
+      },
+      { root, rootMargin: "400px" },
+    );
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, [hasMore, visibleCount]);
 
   // ---- ERROR state (local flag; RETRY → onChange) ----
   if (archiveError) {
@@ -486,7 +475,7 @@ export function HistoryPanel({
   }
 
   return (
-    <div className="panel-body hm">
+    <div className="panel-body hm" ref={scrollRef}>
       {/* stats strip */}
       <div className="hm-stats">
         <div className="hm-stat">
@@ -516,7 +505,7 @@ export function HistoryPanel({
         </div>
       </div>
 
-      {/* toolbar: search + filters + bulk-select */}
+      {/* toolbar: transcript search only */}
       <div className="hm-toolbar">
         <div className="hm-search">
           <span className="hm-search-ico">
@@ -539,60 +528,7 @@ export function HistoryPanel({
             </button>
           ) : null}
         </div>
-        {apps.length > 0 ? (
-          <select className="hm-select" value={appFilter} onChange={(e) => setAppFilter(e.target.value)}>
-            <option value="">{t("history.filterApp")}</option>
-            {apps.map((a) => (
-              <option key={a} value={a}>
-                {a.toUpperCase()}
-              </option>
-            ))}
-          </select>
-        ) : null}
-        {langs.length > 1 ? (
-          <select className="hm-select" value={langFilter} onChange={(e) => setLangFilter(e.target.value)}>
-            <option value="">{t("history.filterLang")}</option>
-            {langs.map((l) => (
-              <option key={l} value={l}>
-                {langLabel(l)}
-              </option>
-            ))}
-          </select>
-        ) : null}
-        <button
-          type="button"
-          className={"vx-btn" + (favOnly ? " vx-btn--mag" : "")}
-          onClick={() => setFavOnly((v) => !v)}
-        >
-          <IcoStar size={13} on={favOnly} />
-          {t("history.filterFav")}
-        </button>
-        <button
-          type="button"
-          className={"vx-btn" + (selectMode ? " vx-btn--mag" : "")}
-          onClick={() => {
-            setSelectMode((v) => !v);
-            setSelected(new Set());
-          }}
-        >
-          {t("history.select")}
-        </button>
       </div>
-
-      {selectMode ? (
-        <div className="hm-selbar">
-          <span>{t("history.selectedCount", { n: selected.size })}</span>
-          <button
-            type="button"
-            className="vx-btn vx-btn--danger"
-            disabled={selected.size === 0}
-            onClick={deleteSelected}
-          >
-            <IcoTrash size={14} />
-            {t("history.deleteSelected")}
-          </button>
-        </div>
-      ) : null}
 
       {groups.length === 0 ? (
         // ---- EMPTY-SEARCH state (filters exclude everything) ----
@@ -622,35 +558,29 @@ export function HistoryPanel({
                 const cp = copied === item.id;
                 const ctx = item.appName || item.website;
                 const sc = statusChip(item.status);
-                const sel = selected.has(item.id);
                 const size = fmtBytes(item.audioBytes);
+                const took = tookLabel(item.transcriptionMs);
                 const provider = modelById(registry, item.modelId)?.provider;
                 const costVal = estimateCost(modelById(registry, item.modelId), item.durationSecs);
                 const cost = costVal > 0 ? formatCost(costVal) : "";
                 const hasText = !!item.transcript?.trim();
+                // Structured-data tabs appear only when the provider returned them.
+                const tabs: { key: TabKey; label: string }[] = [
+                  { key: "text", label: t("history.tabText") },
+                ];
+                if (item.wordStamps?.length) tabs.push({ key: "stamps", label: t("history.tabStamps") });
+                if (item.speakers?.length) tabs.push({ key: "speakers", label: t("history.tabSpeakers") });
+                const effTab: TabKey = tabs.some((x) => x.key === tab) ? tab : "text";
                 return (
                   <div
                     key={item.id}
                     className={"tcard" + (exp ? " tcard--open" : dim ? " tcard--dim" : "")}
                   >
-                    {/* collapsed header — click toggles (or selects in bulk mode) */}
+                    {/* collapsed header — click toggles expansion */}
                     <div
                       className="hm-card-head"
-                      onClick={() =>
-                        selectMode ? toggleSelect(item.id) : setExpanded(exp ? null : item.id)
-                      }
+                      onClick={() => setExpanded(exp ? null : item.id)}
                     >
-                      {selectMode ? (
-                        <span className="hm-chk">
-                          {sel ? (
-                            <IcoCheck size={16} />
-                          ) : (
-                            <span
-                              style={{ width: 14, height: 14, border: "1px solid var(--ink-3)" }}
-                            />
-                          )}
-                        </span>
-                      ) : null}
                       <span className="hm-time">{timeLabel(item.createdAt)}</span>
                       <div className="hm-preview-wrap">
                         {exp ? null : (
@@ -660,14 +590,9 @@ export function HistoryPanel({
                         )}
                       </div>
                       <div className="hm-head-right">
-                        {item.favorite ? (
-                          <span className="hm-fav on" aria-label="favorite">
-                            <IcoStar size={15} on />
-                          </span>
-                        ) : null}
                         {sc ? <span className={"hm-status " + sc.cls}>{sc.label}</span> : null}
                         {ctx ? <span className="hm-ctx">{ctx.toUpperCase()}</span> : null}
-                        {!exp && !selectMode ? (
+                        {!exp ? (
                           <div
                             className="hovctl"
                             style={{ display: "flex", alignItems: "center", gap: 12 }}
@@ -695,11 +620,49 @@ export function HistoryPanel({
                     </div>
 
                     {/* expanded body */}
-                    {exp && !selectMode ? (
+                    {exp ? (
                       <div className="hm-body">
-                        <div className={"hm-text" + (hasText ? "" : " placeholder")}>
-                          {previewText(item)}
-                        </div>
+                        {tabs.length > 1 ? (
+                          <div className="hm-tabs">
+                            {tabs.map((tb) => (
+                              <button
+                                key={tb.key}
+                                type="button"
+                                className={"vx-tab" + (effTab === tb.key ? " vx-tab--on" : "")}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setTab(tb.key);
+                                }}
+                              >
+                                {tb.label}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+
+                        {effTab === "stamps" ? (
+                          <div className="hm-stamps">
+                            {item.wordStamps.map((w, i) => (
+                              <span key={`${i}-${w.start}`} className="hm-stamp">
+                                <span className="hm-stamp-t">{tcLabel(w.start)}</span>
+                                <span className="hm-stamp-w">{w.word}</span>
+                              </span>
+                            ))}
+                          </div>
+                        ) : effTab === "speakers" ? (
+                          <div className="hm-speakers">
+                            {item.speakers.map((s, i) => (
+                              <div key={`${i}-${s.start}`} className="hm-spk">
+                                <span className="hm-spk-k">{speakerLabel(s.speaker)}</span>
+                                <span className="hm-spk-t">{s.text}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className={"hm-text" + (hasText ? "" : " placeholder")}>
+                            {previewText(item)}
+                          </div>
+                        )}
 
                         {/* play control */}
                         <div className="hm-play-row">
@@ -715,28 +678,19 @@ export function HistoryPanel({
                           <span className="hm-play-read">{durLabel(item.durationSecs)}</span>
                         </div>
 
-                        {/* action row */}
+                        {/* action row — copy follows the active tab */}
                         <div className="hm-actions">
                           <button
                             type="button"
                             className={"vx-btn" + (cp ? " vx-btn--mag" : "")}
                             disabled={!hasText}
-                            onClick={(e) => doCopy(e, item)}
+                            onClick={(e) => doCopy(e, item, copyTextFor(item, effTab))}
                           >
                             {cp ? <IcoCheck size={14} /> : <IcoCopy size={14} />}
                             {cp ? t("history.copied") : t("history.copy")}
                             {item.copyCount > 0 ? (
                               <span style={{ color: "var(--ink-3)" }}>{fmtCount(item.copyCount)}</span>
                             ) : null}
-                          </button>
-
-                          <button
-                            type="button"
-                            className={"vx-btn" + (item.favorite ? " vx-btn--mag" : "")}
-                            onClick={(e) => doFavorite(e, item)}
-                          >
-                            <IcoStar size={14} on={item.favorite} />
-                            {t("history.favorite")}
                           </button>
 
                           {/* re-transcribe (file-capable modes only) */}
@@ -849,20 +803,18 @@ export function HistoryPanel({
                             <span className="hm-meta-k">DUR</span>
                             <span className="hm-meta-v">{durLabel(item.durationSecs)}</span>
                           </span>
-                          <span className="hm-meta-cell">
-                            <span className="hm-meta-k">{t("history.words")}</span>
-                            <span className="hm-meta-v">{item.words}</span>
-                          </span>
+                          {took ? (
+                            <span className="hm-meta-cell">
+                              <span className="hm-meta-k">{t("history.took")}</span>
+                              <span className="hm-meta-v">{took}</span>
+                            </span>
+                          ) : null}
                           {size ? (
                             <span className="hm-meta-cell">
                               <span className="hm-meta-k">SIZE</span>
                               <span className="hm-meta-v">{size}</span>
                             </span>
                           ) : null}
-                          <span className="hm-meta-cell">
-                            <span className="hm-meta-k">{t("modes.lang")}</span>
-                            <span className="hm-meta-v">{langLabel(item.language)}</span>
-                          </span>
                           {cost ? (
                             <span className="hm-meta-cell">
                               <span className="hm-meta-k">COST</span>
@@ -879,6 +831,7 @@ export function HistoryPanel({
           </div>
         ))
       )}
+      {hasMore ? <div ref={sentinelRef} className="hm-sentinel" aria-hidden="true" /> : null}
     </div>
   );
 }

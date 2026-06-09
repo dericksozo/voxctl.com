@@ -24,6 +24,8 @@ use tokio_tungstenite::{
     tungstenite::{client::IntoClientRequest, Message},
 };
 
+use crate::file_transcribe::TranscriptOutput;
+
 const WS_URL: &str = "wss://api.openai.com/v1/realtime?intent=transcription";
 const MODEL: &str = "gpt-realtime-whisper";
 const TRANSCRIPTION_DELAY: &str = "low";
@@ -45,7 +47,7 @@ impl OpenAiRealtimeTranscriber {
     /// transcript is awaited with [`RealtimeSession::finish`].
     pub fn open_session(api_key: String, language: Option<String>) -> RealtimeSession {
         let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Vec<i16>>();
-        let (done_tx, done_rx) = oneshot::channel::<Result<String, String>>();
+        let (done_tx, done_rx) = oneshot::channel::<Result<TranscriptOutput, String>>();
         tauri::async_runtime::spawn(session_task(api_key, language, audio_rx, done_tx));
         RealtimeSession { audio_tx, done_rx }
     }
@@ -54,7 +56,7 @@ impl OpenAiRealtimeTranscriber {
 /// Handle to a live transcription session (see [`OpenAiRealtimeTranscriber::open_session`]).
 pub struct RealtimeSession {
     audio_tx: mpsc::UnboundedSender<Vec<i16>>,
-    done_rx: oneshot::Receiver<Result<String, String>>,
+    done_rx: oneshot::Receiver<Result<TranscriptOutput, String>>,
 }
 
 impl RealtimeSession {
@@ -63,7 +65,7 @@ impl RealtimeSession {
     /// handle the audio pipeline already drives.
     pub(crate) fn from_parts(
         audio_tx: mpsc::UnboundedSender<Vec<i16>>,
-        done_rx: oneshot::Receiver<Result<String, String>>,
+        done_rx: oneshot::Receiver<Result<TranscriptOutput, String>>,
     ) -> Self {
         Self { audio_tx, done_rx }
     }
@@ -78,7 +80,7 @@ impl RealtimeSession {
     /// Stop accepting audio and await the final transcript. Drops this handle's
     /// sender; once all other senders (the capture forwarder) are gone too, the
     /// background task commits any final buffered audio and reads to completion.
-    pub async fn finish(self) -> Result<String, String> {
+    pub async fn finish(self) -> Result<TranscriptOutput, String> {
         drop(self.audio_tx);
         self.done_rx
             .await
@@ -93,9 +95,12 @@ async fn session_task(
     api_key: String,
     language: Option<String>,
     mut audio_rx: mpsc::UnboundedReceiver<Vec<i16>>,
-    done_tx: oneshot::Sender<Result<String, String>>,
+    done_tx: oneshot::Sender<Result<TranscriptOutput, String>>,
 ) {
-    let result = run_session(&api_key, language, &mut audio_rx).await;
+    // gpt-realtime-whisper streams plain text only — no word/speaker metadata.
+    let result = run_session(&api_key, language, &mut audio_rx)
+        .await
+        .map(TranscriptOutput::text_only);
     let _ = done_tx.send(result);
 }
 

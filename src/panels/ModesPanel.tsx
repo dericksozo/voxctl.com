@@ -61,6 +61,7 @@ function emptyMode(model: string): Mode {
 export function ModesPanel({
   modes,
   activeModeId,
+  defaultModeId,
   registry,
   providers,
   onChange,
@@ -68,6 +69,7 @@ export function ModesPanel({
 }: {
   modes: Mode[];
   activeModeId: string | null;
+  defaultModeId: string | null;
   registry: Registry | null;
   providers: ProviderStatus;
   onChange: () => void;
@@ -127,6 +129,9 @@ export function ModesPanel({
       {modes.map((m) => {
         const triggers = [...m.triggerApps, ...m.triggerWebsites];
         const active = m.id === activeModeId;
+        // Only the default mode is non-deletable; every other mode (incl. shipped
+        // presets) can be removed.
+        const isDefault = m.id === defaultModeId;
         const model = modelById(registry, m.model);
         const providerLabel =
           model && registry
@@ -144,11 +149,11 @@ export function ModesPanel({
                 <button type="button" className="vx-btn" onClick={() => setEditing({ ...m })}>
                   {t("modes.edit")}
                 </button>
-                {m.builtin ? null : (
+                {isDefault ? null : (
                   <button
                     type="button"
                     className="vx-btn vx-btn--danger vxm-del"
-                    aria-label={t("modes.edit")}
+                    aria-label={t("modes.delete")}
                     onClick={() => remove(m)}
                   >
                     ✕
