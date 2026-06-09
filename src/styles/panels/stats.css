@@ -12,7 +12,8 @@
 /* ---------- big-stat row ---------- */
 .bigstat-row {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* Two per row (2x2). Four across crowded the big numbers and clipped them. */
+  grid-template-columns: repeat(2, 1fr);
   border: 1px solid var(--line-soft);
   background: rgba(255, 255, 255, 0.4);
   padding: 24px 0;
@@ -21,11 +22,17 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 4px 28px;
+  padding: 16px 28px;
   border-right: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
 }
-.bigstat:last-child {
+/* Right column: no divider on the right edge. */
+.bigstat:nth-child(even) {
   border-right: none;
+}
+/* Bottom row: no divider underneath. */
+.bigstat:nth-child(n + 3) {
+  border-bottom: none;
 }
 .bigstat-k {
   font-family: var(--mono);
