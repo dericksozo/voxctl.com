@@ -76,7 +76,12 @@ whose provider has a validated key.
   (stored / validated-green / invalid-red).
 - **Keys live in the macOS Keychain**, per-provider, never in plaintext.
 - **Costs are local estimates only.** `duration × rate` (Gemini: from audio-token
-  count). **Never** call providers' billing APIs.
+  count). **Never** call providers' billing APIs. The all-time spend is recomputed
+  live from each row's `model_id` + duration (no stored cost), so registry price
+  changes apply retroactively. Two cases legitimately estimate **$0** and are not
+  backfilled (we never fabricate a price): pre-`model_id` legacy rows (empty
+  `model_id` → unknown model), and token-billed models (`costUnit: perToken`, e.g.
+  Gemini) since no per-recording token count is persisted to multiply.
 - **Re-run is by MODE, not raw model** — the mode encodes provider/model/options.
   Offer only file-capable modes; if none exist, prompt to create one.
 - **Offline queue + retries.** Transient 429/5xx must queue and retry; history
