@@ -225,6 +225,7 @@ export default function App() {
             onChange={refreshHistory}
             go={switchTo}
             stopToken={audioStopToken}
+            transitioning={phase !== "idle"}
             onSection={setHeaderSection}
           />
         );
