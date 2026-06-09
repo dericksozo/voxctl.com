@@ -255,7 +255,15 @@ input {
   position: relative;
   color: var(--ink-2);
 }
-.prov .tip {
+/* Generic tooltip wrapper — reuses the .prov tooltip styling for any control
+   (e.g. the card copy icon) that wants a styled hover tip instead of a native one. */
+.tipwrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.prov .tip,
+.tipwrap .tip {
   position: absolute;
   bottom: calc(100% + 8px);
   left: 50%;
@@ -271,7 +279,8 @@ input {
   transition: 0.1s;
   z-index: 40;
 }
-.prov .tip::after {
+.prov .tip::after,
+.tipwrap .tip::after {
   content: "";
   position: absolute;
   top: 100%;
@@ -280,7 +289,8 @@ input {
   border: 4px solid transparent;
   border-top-color: var(--ink);
 }
-.prov:hover .tip {
+.prov:hover .tip,
+.tipwrap:hover .tip {
   opacity: 1;
 }
 .prov:hover {
