@@ -81,6 +81,17 @@
   border: 1px solid var(--mag-line);
   padding: 3px 8px;
 }
+/* Lock indicator: shown while a mode is recording/transcribing and so can't be
+   edited or deleted. */
+.vxm-inuse-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  color: var(--gray);
+  border: 1px solid var(--line);
+  padding: 3px 8px;
+}
 .vxm-card-actions {
   margin-left: auto;
   display: flex;

@@ -5,7 +5,7 @@ import { ProviderLogo } from "../components/ProviderLogo";
 import { t } from "../i18n";
 import { langLabel, LANGUAGES } from "../lib/languages";
 import { deleteMode, saveMode, setModeEnabled } from "../lib/ipc";
-import type { Mode } from "../lib/types";
+import type { HistoryItem, Mode } from "../lib/types";
 import {
   type Capabilities,
   costLabel,
@@ -64,6 +64,8 @@ export function ModesPanel({
   defaultModeId,
   registry,
   providers,
+  history,
+  recording,
   onChange,
   go,
 }: {
@@ -72,10 +74,22 @@ export function ModesPanel({
   defaultModeId: string | null;
   registry: Registry | null;
   providers: ProviderStatus;
+  history: HistoryItem[] | null | undefined;
+  recording: boolean;
   onChange: () => void;
   go: (panel: string) => void;
 }) {
   const [editing, setEditing] = useState<Mode | null>(null);
+
+  // A mode is "in use" — and so locked from edit/delete — while it drives the
+  // live recording, or while a recording it produced is still transcribing.
+  // History stores the mode *name* (not id), so match by name for the
+  // transcribing window; that's sufficient for a UI lock.
+  const transcribingNames = new Set(
+    (history ?? []).filter((h) => h.status === "transcribing").map((h) => h.modeName),
+  );
+  const isInUse = (m: Mode) =>
+    (recording && m.id === activeModeId) || transcribingNames.has(m.name);
 
   async function toggle(m: Mode) {
     try {
@@ -132,6 +146,8 @@ export function ModesPanel({
         // Only the default mode is non-deletable; every other mode (incl. shipped
         // presets) can be removed.
         const isDefault = m.id === defaultModeId;
+        // Locked from edit/delete while recording with it or transcribing its output.
+        const inUse = isInUse(m);
         const model = modelById(registry, m.model);
         const providerLabel =
           model && registry
@@ -145,8 +161,15 @@ export function ModesPanel({
             <div className="vxm-card-head">
               <span className="vxm-name">{m.name}</span>
               {active ? <span className="vxm-active-badge">● {t("modes.active")}</span> : null}
+              {inUse ? <span className="vxm-inuse-badge">{t("modes.inUse")}</span> : null}
               <div className="vxm-card-actions">
-                <button type="button" className="vx-btn" onClick={() => setEditing({ ...m })}>
+                <button
+                  type="button"
+                  className="vx-btn"
+                  disabled={inUse}
+                  title={inUse ? t("modes.inUseHint") : undefined}
+                  onClick={() => setEditing({ ...m })}
+                >
                   {t("modes.edit")}
                 </button>
                 {isDefault ? null : (
@@ -154,6 +177,8 @@ export function ModesPanel({
                     type="button"
                     className="vx-btn vx-btn--danger vxm-del"
                     aria-label={t("modes.delete")}
+                    disabled={inUse}
+                    title={inUse ? t("modes.inUseHint") : undefined}
                     onClick={() => remove(m)}
                   >
                     ✕

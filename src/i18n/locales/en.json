@@ -91,6 +91,8 @@
 
   "modes.add": "DEFINE NEW MODE",
   "modes.active": "ACTIVE",
+  "modes.inUse": "IN USE",
+  "modes.inUseHint": "Locked while recording or transcribing with this mode.",
   "modes.enabled": "ENABLED",
   "modes.disabled": "DISABLED",
   "modes.trigger": "TRIGGER",

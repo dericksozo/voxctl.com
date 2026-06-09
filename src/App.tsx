@@ -238,6 +238,8 @@ export default function App() {
             defaultModeId={defaultModeId}
             registry={registry}
             providers={providers}
+            history={history}
+            recording={recording}
             onChange={refreshModes}
             go={switchTo}
           />
