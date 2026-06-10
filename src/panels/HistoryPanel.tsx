@@ -511,7 +511,11 @@ export function HistoryPanel({
     );
     io.observe(sentinel);
     return () => io.disconnect();
-  }, [hasMore, visibleCount]);
+    // `settled` is a dep so the observer re-attaches once the real list (and its
+    // sentinel) mounts after the deferred render. Without it, tabbing back into a
+    // panel whose data is already loaded leaves the sentinel unobserved — neither
+    // `hasMore` nor `visibleCount` changes on settle — so load-on-scroll dies.
+  }, [hasMore, visibleCount, settled]);
 
   // Header scroll-spy: report the day group nearest the top of the scroll
   // container so the content-frame title tracks where you are (`// HOME / TODAY`).
