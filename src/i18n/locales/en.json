@@ -120,6 +120,7 @@
   "modes.field.keywordsHint": "COMMA-SEPARATED, BEST-EFFORT",
   "modes.cancel": "CANCEL",
   "modes.save": "SAVE MODE",
+  "modes.itnNeedsLang": "Inverse Text Normalization needs a specific language for xAI — pick one above (not AUTO).",
 
   "mode.switch": "SWITCH MODE",
   "mode.unpin": "UNPIN (RESUME AUTO)",

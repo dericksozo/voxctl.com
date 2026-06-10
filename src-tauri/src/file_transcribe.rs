@@ -34,6 +34,13 @@ impl TranscribeOptions {
             .as_deref()
             .filter(|l| !l.is_empty() && *l != "auto")
     }
+
+    /// Whether to send xAI's ITN flag (`format=true`). It is only valid with an
+    /// explicit language — xAI 400s ("Field 'language' is required when 'format'
+    /// is true") otherwise — so a language-less mode skips ITN rather than fail.
+    fn xai_send_itn(&self) -> bool {
+        self.inverse_text_normalization && self.lang().is_some()
+    }
 }
 
 /// One word with its timing (and speaker, when diarization is on). `speaker` is a
@@ -343,7 +350,9 @@ impl FileTranscriber for XaiTranscriber {
         if let Some(l) = opts.lang() {
             form = form.text("language", l.to_string());
         }
-        if opts.inverse_text_normalization {
+        // The mode editor enforces a language when ITN is on; this guard ensures a
+        // language-less request degrades (skips ITN) instead of failing outright.
+        if opts.xai_send_itn() {
             form = form.text("format", "true");
         }
         if opts.diarization {
@@ -500,6 +509,24 @@ mod tests {
                 m.provider
             );
         }
+    }
+
+    #[test]
+    fn xai_itn_requires_a_language() {
+        let mut o = TranscribeOptions {
+            inverse_text_normalization: true,
+            ..Default::default()
+        };
+        // ITN on but language auto/none → don't send `format` (would 400).
+        assert!(!o.xai_send_itn());
+        o.language = Some("auto".into());
+        assert!(!o.xai_send_itn());
+        // ITN on with an explicit language → send `format`.
+        o.language = Some("ja".into());
+        assert!(o.xai_send_itn());
+        // ITN off → never send, regardless of language.
+        o.inverse_text_normalization = false;
+        assert!(!o.xai_send_itn());
     }
 
     #[test]

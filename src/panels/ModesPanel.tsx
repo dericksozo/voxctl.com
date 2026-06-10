@@ -254,6 +254,13 @@ function ModeForm({
 
   const selModel = modelById(registry, m.model);
   const caps = selModel ? CAP_FIELDS.filter((c) => selModel.capabilities[c.key]) : [];
+  // xAI rejects ITN (`format=true`) unless an explicit language is set ("Field
+  // 'language' is required when 'format' is true"). Block saving that invalid
+  // combination and point the user at the language field.
+  const itnNeedsLang =
+    selModel?.provider === "xai" &&
+    !!m.capabilities.inverseTextNormalization &&
+    (m.language === "auto" || !m.language);
 
   // Selecting a model resets fields the new model doesn't support, so we never
   // persist (or send) a language/keywords a model ignores.
@@ -357,6 +364,7 @@ function ModeForm({
               </option>
             ))}
           </select>
+          {itnNeedsLang ? <p className="vxm-warn">⚠ {t("modes.itnNeedsLang")}</p> : null}
         </div>
       ) : null}
       {selModel?.supportsKeywords ? (
@@ -374,7 +382,12 @@ function ModeForm({
           />
         </div>
       ) : null}
-      <button type="button" className="vxm-save" onClick={() => onSave(m)}>
+      <button
+        type="button"
+        className="vxm-save"
+        disabled={itnNeedsLang}
+        onClick={() => onSave(m)}
+      >
         ✓ {t("modes.save")}
       </button>
     </div>
