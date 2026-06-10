@@ -16,6 +16,32 @@ import { ProviderLogo } from "../components/ProviderLogo";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
+/** xAI returns long file transcripts (~55+ min) without speaker labels even when
+ *  diarization is requested. Warn before a re-run that's likely to hit this — a
+ *  UX nudge only, never a hard limit and never used in success/failure detection. */
+const XAI_DIARIZATION_WARNING_SECONDS = 55 * 60;
+
+/** Effective diarization for a mode: enabled on the mode AND supported by its model
+ *  (mirrors the backend's `build_options` intersection). */
+function modeDiarizationOn(registry: Registry | null, mode: Mode): boolean {
+  const model = modelById(registry, mode.model);
+  return !!(mode.capabilities?.diarization && model?.capabilities?.diarization);
+}
+
+/** Whether to surface the soft pre-run warning for an xAI long-file diarization
+ *  re-run. Re-run is always file transcription, so kind isn't checked here. */
+function shouldWarnXaiLongDiarization(
+  registry: Registry | null,
+  mode: Mode,
+  durationSecs: number,
+): boolean {
+  return (
+    modelById(registry, mode.model)?.provider === "xai" &&
+    modeDiarizationOn(registry, mode) &&
+    durationSecs >= XAI_DIARIZATION_WARNING_SECONDS
+  );
+}
+
 /** How many transcript cards to render per batch (grown on scroll). Keeps the
  *  DOM small so returning to Home with a large archive stays snappy. */
 const PAGE_SIZE = 30;
@@ -235,6 +261,10 @@ export function HistoryPanel({
   const [rerunFor, setRerunFor] = useState<number | null>(null);
   const [confirmDel, setConfirmDel] = useState<number | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
+  // Soft pre-run confirm for xAI long-file diarization (which mode the user picked).
+  const [warnFor, setWarnFor] = useState<{ id: number; modeId: string } | null>(null);
+  // Cards whose last re-run requested diarization but got no speaker labels.
+  const [diarDropped, setDiarDropped] = useState<Set<number>>(new Set());
   // Search — the only list control on Home.
   const [query, setQuery] = useState("");
   // Batch rendering: render a page of cards and grow as the sentinel scrolls in.
@@ -272,9 +302,12 @@ export function HistoryPanel({
   useEffect(() => setVisibleCount(PAGE_SIZE), [query]);
 
   // Collapsing a card resets its transient per-card UI (incl. the active tab).
+  // The diarization-dropped notice persists across collapse — it's a result of the
+  // last run, cleared only by a re-run that succeeds (or one that drops again).
   useEffect(() => {
     setRerunFor(null);
     setConfirmDel(null);
+    setWarnFor(null);
     setTab("text");
   }, [expanded]);
 
@@ -348,9 +381,18 @@ export function HistoryPanel({
     e.stopPropagation();
     setBusy(item.id);
     setRerunFor(null);
+    setWarnFor(null);
     try {
-      await retranscribe(item.id, modeId);
+      const res = await retranscribe(item.id, modeId);
       onChange();
+      // Persist (or clear) the "no speaker labels" notice for this card based on
+      // what the just-completed re-run actually returned.
+      setDiarDropped((prev) => {
+        const next = new Set(prev);
+        if (res.diarizationDropped) next.add(item.id);
+        else next.delete(item.id);
+        return next;
+      });
     } catch (err) {
       console.error("re-run failed", err);
     } finally {
@@ -684,6 +726,21 @@ export function HistoryPanel({
                     {/* expanded body */}
                     {exp ? (
                       <div className="hm-body">
+                        {diarDropped.has(item.id) ? (
+                          <div className="hm-notice">
+                            <span className="hm-notice-ico">
+                              <IcoAlert size={16} />
+                            </span>
+                            <div className="hm-notice-text">
+                              <div className="hm-notice-title">
+                                {t("history.diarizationDropped.title")}
+                              </div>
+                              <p className="hm-notice-body">
+                                {t("history.diarizationDropped.body")}
+                              </p>
+                            </div>
+                          </div>
+                        ) : null}
                         {tabs.length > 1 ? (
                           <div className="hm-tabs">
                             {tabs.map((tb) => (
@@ -796,6 +853,14 @@ export function HistoryPanel({
                                               go("settings");
                                               return;
                                             }
+                                            if (
+                                              shouldWarnXaiLongDiarization(registry, m, item.durationSecs)
+                                            ) {
+                                              e.stopPropagation();
+                                              setRerunFor(null);
+                                              setWarnFor({ id: item.id, modeId: m.id });
+                                              return;
+                                            }
                                             doRerun(e, item, m.id);
                                           }}
                                         >
@@ -825,6 +890,46 @@ export function HistoryPanel({
                                     ＋ {t("history.rerunCreate")}
                                   </button>
                                 )}
+                              </div>
+                            ) : null}
+                            {warnFor?.id === item.id ? (
+                              <div className="hm-warn" onClick={(e) => e.stopPropagation()}>
+                                <div className="hm-warn-head">
+                                  {t("history.xaiLongDiarizationWarning.title")}
+                                </div>
+                                <p className="hm-warn-body">
+                                  {t("history.xaiLongDiarizationWarning.body")}
+                                </p>
+                                <div className="hm-warn-actions">
+                                  <button
+                                    type="button"
+                                    className="vx-btn vx-btn--mag"
+                                    onClick={(e) => doRerun(e, item, warnFor.modeId)}
+                                  >
+                                    {t("history.xaiLongDiarizationWarning.continue")}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="vx-btn"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setWarnFor(null);
+                                      setRerunFor(item.id);
+                                    }}
+                                  >
+                                    {t("history.xaiLongDiarizationWarning.chooseMode")}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="vx-btn"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setWarnFor(null);
+                                    }}
+                                  >
+                                    {t("history.xaiLongDiarizationWarning.cancel")}
+                                  </button>
+                                </div>
                               </div>
                             ) : null}
                           </div>

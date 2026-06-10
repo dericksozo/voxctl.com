@@ -88,6 +88,13 @@
   "history.rerunHeadline": "Captured live? Re-run through a file mode for a cleaner transcript.",
   "history.rerunCreate": "CREATE A FILE MODE",
   "history.addKey": "ADD KEY",
+  "history.diarizationDropped.title": "SPEAKER LABELS NOT RETURNED",
+  "history.diarizationDropped.body": "The transcript completed, but xAI did not return speaker labels for this recording. This can happen with longer file transcriptions. The transcript itself was saved.",
+  "history.xaiLongDiarizationWarning.title": "SPEAKER LABELS MAY BE UNAVAILABLE",
+  "history.xaiLongDiarizationWarning.body": "This recording is roughly 55+ minutes. xAI may return the transcript without speaker labels when diarization is enabled. You can continue, choose another mode, or cancel.",
+  "history.xaiLongDiarizationWarning.continue": "CONTINUE WITH XAI",
+  "history.xaiLongDiarizationWarning.chooseMode": "CHOOSE ANOTHER MODE",
+  "history.xaiLongDiarizationWarning.cancel": "CANCEL",
 
   "modes.add": "DEFINE NEW MODE",
   "modes.active": "ACTIVE",
@@ -121,6 +128,7 @@
   "modes.cancel": "CANCEL",
   "modes.save": "SAVE MODE",
   "modes.itnNeedsLang": "Inverse Text Normalization needs a specific language for xAI — pick one above (not AUTO).",
+  "modes.xaiDiarizationHint": "For longer file transcriptions, xAI may return the transcript without speaker labels. The transcript still completes, but diarization may be unavailable around 55+ minutes.",
 
   "mode.switch": "SWITCH MODE",
   "mode.unpin": "UNPIN (RESUME AUTO)",
