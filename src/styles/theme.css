@@ -297,6 +297,32 @@ input {
   color: var(--ink);
 }
 
+/* Portaled tooltip (rendered to <body>) used by ProviderChip so it can't be
+   clipped by a panel's overflow. Positioned via inline left/top set to the
+   chip's centre/top in viewport coordinates; translate lifts it above the chip
+   and centres it horizontally. Visuals mirror `.tip`. */
+.vx-tip {
+  position: fixed;
+  transform: translate(-50%, calc(-100% - 8px));
+  background: var(--ink);
+  color: #fff;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  padding: 4px 8px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 60;
+}
+.vx-tip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 4px solid transparent;
+  border-top-color: var(--ink);
+}
+
 /* skeleton shimmer */
 @keyframes vxshimmer {
   0% {

@@ -1,5 +1,6 @@
 import "../styles/panels/home.css";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { t } from "../i18n";
 import { deleteRecording, incrementCopy, retranscribe } from "../lib/ipc";
@@ -210,13 +211,55 @@ const IcoAlert = ({ size = 38 }: IcoProps) => (
   </Svg>
 );
 
-/** Provider brand chip with mode tooltip (reuses the shared `.prov` class). */
+/** Provider brand chip with mode tooltip (reuses the shared `.prov` class).
+ *  The tooltip is rendered through a portal with `position: fixed` so it escapes
+ *  the panel's scroll container (`overflow-y: auto` / `overflow-x: hidden`) instead
+ *  of being clipped at the panel edge. Because a fixed/portaled element doesn't
+ *  extend the scrollable area, this never introduces a stray scrollbar. */
 function ProviderChip({ provider, mode, size = 15 }: { provider?: string; mode?: string; size?: number }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [tip, setTip] = useState<{ x: number; y: number } | null>(null);
+
+  const place = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    // Anchor centred on the chip, clamped to the viewport so a long label is
+    // always fully visible rather than running off-screen.
+    const x = Math.min(Math.max(r.left + r.width / 2, 12), window.innerWidth - 12);
+    setTip({ x, y: r.top });
+  }, []);
+
+  // Keep the tooltip glued to the chip while it's shown (the chip can move under
+  // a scroll or resize since the portal lives outside the scroll container).
+  useEffect(() => {
+    if (!tip) return;
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
+  }, [tip, place]);
+
   if (!provider) return null;
   return (
-    <span className="prov" style={{ width: size + 8, height: size + 8 }}>
+    <span
+      ref={ref}
+      className="prov"
+      style={{ width: size + 8, height: size + 8 }}
+      onMouseEnter={mode ? place : undefined}
+      onMouseLeave={mode ? () => setTip(null) : undefined}
+    >
       <ProviderLogo id={provider} size={size} />
-      {mode ? <span className="tip">{mode}</span> : null}
+      {mode && tip
+        ? createPortal(
+            <span className="vx-tip" style={{ left: tip.x, top: tip.y }}>
+              {mode}
+            </span>,
+            document.body,
+          )
+        : null}
     </span>
   );
 }
