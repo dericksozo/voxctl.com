@@ -292,6 +292,10 @@
   letter-spacing: 0.04em;
   color: var(--warn);
 }
+/* neutral, non-alarming variant (e.g. xAI long-file diarization note) */
+.vxm-warn--info {
+  color: var(--ink-3);
+}
 
 /* ---------- model picker ---------- */
 .vxm-picker {

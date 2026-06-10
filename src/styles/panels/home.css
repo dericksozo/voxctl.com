@@ -391,6 +391,68 @@
   filter: brightness(1.06);
 }
 
+/* post-run notice: diarization requested but no speaker labels returned. Neutral
+   (not an error) — the transcript still succeeded. */
+.hm-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--warn);
+  background: var(--panel);
+}
+.hm-notice-ico {
+  color: var(--warn);
+  display: inline-flex;
+  margin-top: 1px;
+}
+.hm-notice-title {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.hm-notice-body {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.55;
+  letter-spacing: 0.02em;
+  color: var(--ink-2);
+}
+
+/* soft pre-run warning popover (xAI long-file diarization) — mirrors .hm-menu */
+.hm-warn {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  width: 300px;
+  background: #fff;
+  border: 1px solid var(--ink);
+  box-shadow: 4px 4px 0 rgba(16, 20, 26, 0.12);
+  padding: 12px 14px;
+}
+.hm-warn-head {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.hm-warn-body {
+  margin: 6px 0 11px;
+  font-size: 11px;
+  line-height: 1.55;
+  letter-spacing: 0.02em;
+  color: var(--ink-2);
+}
+.hm-warn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 /* metadata row */
 .hm-meta {
   display: flex;

@@ -67,9 +67,15 @@ export const deleteRecording = (id: number) => invoke<void>("delete_recording", 
 export const deleteRecordings = (ids: number[]) => invoke<void>("delete_recordings", { ids });
 export const toggleFavorite = (id: number) => invoke<boolean>("toggle_favorite", { id });
 export const incrementCopy = (id: number) => invoke<number>("increment_copy", { id });
+/** Result of a re-run: the transcript text plus whether diarization was requested
+ *  but the provider returned no speaker labels (a known xAI long-file limitation). */
+export type RerunResult = {
+  text: string;
+  diarizationDropped: boolean;
+};
 /** Re-run a saved recording through a chosen (file-capable) mode. */
 export const retranscribe = (id: number, modeId: string) =>
-  invoke<string>("retranscribe", { id, modeId });
+  invoke<RerunResult>("retranscribe", { id, modeId });
 /** Returns the recording's WAV bytes for in-webview playback. */
 export const readAudio = (id: number) => invoke<number[]>("read_audio", { id });
 

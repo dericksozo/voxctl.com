@@ -3,6 +3,7 @@
 //! settings, so re-run is a single mode pick rather than a raw model/language
 //! choice. Only file-capable models can re-process a saved WAV.
 
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::commands::{config, modes};
@@ -11,11 +12,29 @@ use crate::file_transcribe;
 use crate::history::{self, HistoryDb};
 use crate::registry;
 
+/// Result of a manual re-run. Carries the transcript plus a reactive signal that
+/// diarization was requested but the provider returned no speaker labels — a known
+/// xAI long-file limitation (it 200s with full text/words but silently drops every
+/// `speaker` field past ~54–56 min). See PLAN_xai-diarization-silent-failure.md.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RerunResult {
+    pub text: String,
+    pub diarization_dropped: bool,
+}
+
+/// True when diarization was requested, transcript text came back, yet zero
+/// speaker segments were produced. Source of truth for the post-run notice.
+/// Provider-agnostic by shape; duration is deliberately not consulted here.
+fn diarization_dropped(requested: bool, text: &str, speaker_count: usize) -> bool {
+    requested && speaker_count == 0 && !text.trim().is_empty()
+}
+
 /// Re-transcribe a saved recording through `mode_id`. Resolves the mode's model
 /// + capability options, runs the saved WAV through that provider's file API,
 /// and updates the row's transcript, language, model, and status.
 #[tauri::command]
-pub async fn retranscribe(app: AppHandle, id: i64, mode_id: String) -> Result<String, String> {
+pub async fn retranscribe(app: AppHandle, id: i64, mode_id: String) -> Result<RerunResult, String> {
     let item = history::get(&app.state::<HistoryDb>(), id).ok_or("recording not found")?;
 
     let mode = modes::all_modes(&app)
@@ -67,5 +86,40 @@ pub async fn retranscribe(app: AppHandle, id: i64, mode_id: String) -> Result<St
     );
     history::set_model_id(&app.state::<HistoryDb>(), id, &mode.model);
     let _ = app.emit(events::HISTORY_CHANGED, ());
-    Ok(out.text)
+
+    let diarization_dropped =
+        diarization_dropped(options.diarization, &out.text, out.speakers.len());
+    Ok(RerunResult {
+        text: out.text,
+        diarization_dropped,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::diarization_dropped;
+
+    #[test]
+    fn flags_only_when_requested_text_present_and_no_speakers() {
+        // Requested, transcript came back, zero speakers → the silent drop.
+        assert!(diarization_dropped(true, "hello world", 0));
+    }
+
+    #[test]
+    fn not_flagged_when_diarization_not_requested() {
+        assert!(!diarization_dropped(false, "hello world", 0));
+    }
+
+    #[test]
+    fn not_flagged_when_text_empty() {
+        // Empty transcript is a transcription failure, not a speaker-label drop.
+        assert!(!diarization_dropped(true, "   ", 0));
+    }
+
+    #[test]
+    fn not_flagged_when_speakers_present() {
+        // A real single-speaker result still has one segment — that's success.
+        assert!(!diarization_dropped(true, "hello", 1));
+        assert!(!diarization_dropped(true, "hello", 3));
+    }
 }

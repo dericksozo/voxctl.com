@@ -261,6 +261,12 @@ function ModeForm({
     selModel?.provider === "xai" &&
     !!m.capabilities.inverseTextNormalization &&
     (m.language === "auto" || !m.language);
+  // xAI silently drops speaker labels on long file transcriptions (~55+ min), so
+  // flag the limitation when an xAI file mode enables diarization. Reactive to
+  // current state: disappears if diarization is off, provider changes, or the
+  // model isn't file-capable.
+  const xaiDiarizationHint =
+    selModel?.provider === "xai" && !!selModel?.canFile && !!m.capabilities.diarization;
 
   // Selecting a model resets fields the new model doesn't support, so we never
   // persist (or send) a language/keywords a model ignores.
@@ -322,6 +328,9 @@ function ModeForm({
               </div>
             ))}
           </div>
+          {xaiDiarizationHint ? (
+            <p className="vxm-warn vxm-warn--info">{t("modes.xaiDiarizationHint")}</p>
+          ) : null}
         </div>
       ) : null}
 
