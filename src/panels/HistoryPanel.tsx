@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { t } from "../i18n";
 import { deleteRecording, incrementCopy, retranscribe } from "../lib/ipc";
-import type { HistoryItem, Mode } from "../lib/types";
+import type { HistoryItem, Mode, SpeakerSeg, WordStamp } from "../lib/types";
 import {
   estimateCost,
   formatCost,
@@ -70,6 +70,53 @@ const tcLabel = (s: number) => `${pad(Math.floor(s / 60))}:${(s % 60).toFixed(1)
 /** Human speaker label: numeric ids become "SPEAKER n", others pass through. */
 const speakerLabel = (s: string) => (/^\d+$/.test(s) ? `SPEAKER ${s}` : s.toUpperCase());
 
+function speakerSegments(item: HistoryItem): SpeakerSeg[] {
+  const hasWordSpeakers = item.wordStamps?.some((w) => !!w.speaker);
+  if (item.speakers?.length && !(item.modelId === "grok-stt-live" && hasWordSpeakers)) {
+    return item.speakers;
+  }
+  const out: SpeakerSeg[] = [];
+  for (const w of item.wordStamps as WordStamp[]) {
+    if (!w.speaker) continue;
+    const last = out[out.length - 1];
+    if (last?.speaker === w.speaker) {
+      last.text += `${shouldJoinWithSpace(last.text, w.word) ? " " : ""}${w.word}`;
+      last.end = w.end;
+    } else {
+      out.push({ speaker: w.speaker, text: w.word, start: w.start, end: w.end });
+    }
+  }
+  return out;
+}
+
+function shouldJoinWithSpace(current: string, next: string): boolean {
+  const prev = [...current.trimEnd()].pop();
+  const first = [...next.trimStart()][0];
+  if (!prev || !first) return false;
+  if (isUnspacedScript(prev) && isUnspacedScript(first)) return false;
+  if (isNoSpaceBefore(first) || isNoSpaceAfter(prev)) return false;
+  return true;
+}
+
+function isUnspacedScript(ch: string): boolean {
+  const cp = ch.codePointAt(0) ?? 0;
+  return (
+    (cp >= 0x3040 && cp <= 0x309f) ||
+    (cp >= 0x30a0 && cp <= 0x30ff) ||
+    (cp >= 0x3400 && cp <= 0x4dbf) ||
+    (cp >= 0x4e00 && cp <= 0x9fff) ||
+    (cp >= 0xac00 && cp <= 0xd7af)
+  );
+}
+
+function isNoSpaceBefore(ch: string): boolean {
+  return ".,!?:;)]}、。，．！？：；）］｝」』".includes(ch);
+}
+
+function isNoSpaceAfter(ch: string): boolean {
+  return "([{（［｛「『".includes(ch);
+}
+
 /** Which expanded-card tab is shown. */
 type TabKey = "text" | "stamps" | "speakers";
 
@@ -79,7 +126,7 @@ function copyTextFor(item: HistoryItem, tab: TabKey): string {
     return item.wordStamps.map((w) => `[${tcLabel(w.start)}] ${w.word}`).join("\n");
   }
   if (tab === "speakers") {
-    return item.speakers.map((s) => `${speakerLabel(s.speaker)}: ${s.text}`).join("\n\n");
+    return speakerSegments(item).map((s) => `${speakerLabel(s.speaker)}: ${s.text}`).join("\n\n");
   }
   return item.transcript;
 }
@@ -95,6 +142,8 @@ function fmtBytes(n: number): string {
 /** A chip describing a non-done transcription state, or null when done. */
 function statusChip(status: string): { label: string; cls: string } | null {
   switch (status) {
+    case "recording":
+      return { label: t("history.statusRecording"), cls: "busy" };
     case "transcribing":
       return { label: t("history.statusTranscribing"), cls: "busy" };
     case "failed":
@@ -106,10 +155,25 @@ function statusChip(status: string): { label: string; cls: string } | null {
   }
 }
 
+function audioLabel(item: HistoryItem): string {
+  switch (item.audioStatus) {
+    case "capturing":
+      return t("history.audioCapturing");
+    case "saving":
+      return t("history.audioSaving");
+    case "failed":
+      return t("history.audioFailed");
+    default:
+      return durLabel(item.durationSecs);
+  }
+}
+
 /** Transcript text, or a state placeholder when there isn't one yet. */
 function previewText(item: HistoryItem): string {
   if (item.transcript?.trim()) return item.transcript;
   switch (item.status) {
+    case "recording":
+      return t("history.recording");
     case "transcribing":
       return t("history.transcribing");
     case "failed":
@@ -374,6 +438,7 @@ export function HistoryPanel({
 
   async function doPlay(e: React.MouseEvent, item: HistoryItem) {
     e.stopPropagation();
+    if (item.audioStatus !== "ready") return;
     if (playing === item.id) {
       stopPlayback();
       return;
@@ -705,17 +770,19 @@ export function HistoryPanel({
                 const ctx = item.appName || item.website;
                 const sc = statusChip(item.status);
                 const size = fmtBytes(item.audioBytes);
+                const audioReady = item.audioStatus === "ready";
                 const took = tookLabel(item.transcriptionMs);
                 const provider = modelById(registry, item.modelId)?.provider;
                 const costVal = estimateCost(modelById(registry, item.modelId), item.durationSecs);
                 const cost = costVal > 0 ? formatCost(costVal) : "";
                 const hasText = !!item.transcript?.trim();
+                const speakerSegs = speakerSegments(item);
                 // Structured-data tabs appear only when the provider returned them.
                 const tabs: { key: TabKey; label: string }[] = [
                   { key: "text", label: t("history.tabText") },
                 ];
                 if (item.wordStamps?.length) tabs.push({ key: "stamps", label: t("history.tabStamps") });
-                if (item.speakers?.length) tabs.push({ key: "speakers", label: t("history.tabSpeakers") });
+                if (speakerSegs.length) tabs.push({ key: "speakers", label: t("history.tabSpeakers") });
                 const effTab: TabKey = tabs.some((x) => x.key === tab) ? tab : "text";
                 return (
                   <div
@@ -817,7 +884,7 @@ export function HistoryPanel({
                           </div>
                         ) : effTab === "speakers" ? (
                           <div className="hm-speakers">
-                            {item.speakers.map((s, i) => (
+                            {speakerSegs.map((s, i) => (
                               <div key={`${i}-${s.start}`} className="hm-spk">
                                 <span className="hm-spk-k">{speakerLabel(s.speaker)}</span>
                                 <span className="hm-spk-t">{s.text}</span>
@@ -836,12 +903,13 @@ export function HistoryPanel({
                             type="button"
                             className="vx-btn vx-btn--mag"
                             style={{ minWidth: 96, justifyContent: "center" }}
+                            disabled={!audioReady}
                             onClick={(e) => doPlay(e, item)}
                           >
                             {playing === item.id ? <IcoStop size={13} /> : <IcoPlay size={13} />}
                             {playing === item.id ? t("history.stop") : t("history.play")}
                           </button>
-                          <span className="hm-play-read">{durLabel(item.durationSecs)}</span>
+                          <span className="hm-play-read">{audioLabel(item)}</span>
                         </div>
 
                         {/* action row — copy follows the active tab */}

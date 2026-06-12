@@ -53,6 +53,9 @@ pub struct RecorderInner {
     /// Live transcription session for the in-flight recording (None when there's
     /// no API key — the recording is still captured and saved, transcribed on stop).
     pub session: Option<RealtimeSession>,
+    /// History row reserved when capture starts so Home updates immediately.
+    pub current_recording_id: Option<i64>,
+    pub current_audio_path: Option<String>,
 }
 
 #[derive(Default)]
@@ -271,6 +274,23 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
     let cap = start_capture(app, capture_raw_tx)?;
     let input_rate = cap.sample_rate;
 
+    let lang_label = ctx.language.clone().unwrap_or_else(|| "auto".into());
+    let mode_name = ctx.mode_name.clone().unwrap_or_else(|| "—".into());
+    let (recording_id, audio_path) = match crate::history::reserve_recording(
+        app,
+        &lang_label,
+        &mode_name,
+        ctx.app_name.as_deref(),
+        ctx.website.as_deref(),
+        &ctx.model_id,
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = finish_capture(cap);
+            return Err(e);
+        }
+    };
+
     let session = session_bits.map(|(session, raw_tx, raw_rx, pcm_tx)| {
         // The capture thread holds the live sender; drop ours so `raw_rx` closes
         // when capture stops. The forwarder resamples f32 → 24 kHz PCM16 and
@@ -299,7 +319,10 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
         inner.current_ctx = ctx;
         inner.recording = true;
         inner.session = session;
+        inner.current_recording_id = Some(recording_id);
+        inner.current_audio_path = Some(audio_path);
     }
+    let _ = app.emit(events::HISTORY_CHANGED, ());
     hud::show_hud(app);
     play_sfx(app, true);
     let _ = app.emit(
@@ -315,7 +338,7 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
 
 pub fn stop(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<RecorderState>();
-    let (cap, ctx, session) = {
+    let (cap, ctx, session, recording_id, audio_path) = {
         let mut inner = state.0.lock().unwrap();
         if !inner.recording {
             return Ok(());
@@ -325,6 +348,8 @@ pub fn stop(app: &AppHandle) -> Result<(), String> {
             inner.active.take(),
             inner.current_ctx.clone(),
             inner.session.take(),
+            inner.current_recording_id.take(),
+            inner.current_audio_path.take(),
         )
     };
 
@@ -353,13 +378,41 @@ pub fn stop(app: &AppHandle) -> Result<(), String> {
             );
             if samples.is_empty() {
                 drop(session); // nothing to transcribe; let the session task wind down
+                if let Some(id) = recording_id {
+                    let _ = crate::history::delete(&app.state::<crate::history::HistoryDb>(), id);
+                    let _ = app.emit(events::HISTORY_CHANGED, ());
+                }
                 hud::hide_hud(app);
             } else {
-                crate::audio_pipeline::on_recording_finished(app, samples, rate, ctx, session);
+                let Some(id) = recording_id else {
+                    drop(session);
+                    hud::hide_hud(app);
+                    return Err("recording history row missing".into());
+                };
+                let Some(path) = audio_path else {
+                    drop(session);
+                    hud::hide_hud(app);
+                    return Err("recording audio path missing".into());
+                };
+                crate::history::mark_stopped(
+                    &app.state::<crate::history::HistoryDb>(),
+                    id,
+                    secs as f64,
+                    "transcribing",
+                    "saving",
+                );
+                let _ = app.emit(events::HISTORY_CHANGED, ());
+                crate::audio_pipeline::on_recording_finished(
+                    app, samples, rate, ctx, session, id, path,
+                );
             }
         }
         None => {
             drop(session);
+            if let Some(id) = recording_id {
+                let _ = crate::history::delete(&app.state::<crate::history::HistoryDb>(), id);
+                let _ = app.emit(events::HISTORY_CHANGED, ());
+            }
             hud::hide_hud(app);
         }
     }

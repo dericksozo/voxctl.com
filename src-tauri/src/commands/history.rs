@@ -86,5 +86,10 @@ pub fn increment_copy(app: AppHandle, id: i64) -> Result<i64, String> {
 #[tauri::command]
 pub fn read_audio(app: AppHandle, id: i64) -> Result<Vec<u8>, String> {
     let item = history::get(&app.state::<HistoryDb>(), id).ok_or("recording not found")?;
+    match item.audio_status.as_str() {
+        "capturing" | "saving" => return Err("Audio is still being saved.".into()),
+        "failed" => return Err("Audio is unavailable for this recording.".into()),
+        _ => {}
+    }
     std::fs::read(&item.audio_path).map_err(|e| format!("read audio: {e}"))
 }

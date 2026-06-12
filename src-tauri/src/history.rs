@@ -30,12 +30,14 @@ pub struct HistoryItem {
     pub favorite: bool,
     pub copy_count: i64,
     pub audio_path: String,
-    /// "transcribing" | "done" | "failed" | "needs_transcription".
+    /// "recording" | "transcribing" | "done" | "failed" | "needs_transcription".
     pub status: String,
     /// Registry model id used (drives cost + auto-retry).
     pub model_id: String,
     /// Size of the saved WAV on disk, in bytes (0 if the file is gone).
     pub audio_bytes: i64,
+    /// "capturing" | "saving" | "ready" | "failed".
+    pub audio_status: String,
     /// Wall-clock from recording-stop to the final transcript being persisted,
     /// in milliseconds (0 until a transcription completes).
     pub transcription_ms: i64,
@@ -107,6 +109,7 @@ fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
             status        TEXT    NOT NULL DEFAULT 'done',
             model_id      TEXT    NOT NULL DEFAULT '',
             audio_bytes   INTEGER NOT NULL DEFAULT 0,
+            audio_status  TEXT    NOT NULL DEFAULT 'ready',
             transcription_ms INTEGER NOT NULL DEFAULT 0,
             extra_json    TEXT
         );
@@ -136,6 +139,11 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     if !have.iter().any(|c| c == "audio_bytes") {
         conn.execute_batch(
             "ALTER TABLE recordings ADD COLUMN audio_bytes INTEGER NOT NULL DEFAULT 0",
+        )?;
+    }
+    if !have.iter().any(|c| c == "audio_status") {
+        conn.execute_batch(
+            "ALTER TABLE recordings ADD COLUMN audio_status TEXT NOT NULL DEFAULT 'ready'",
         )?;
     }
     if !have.iter().any(|c| c == "transcription_ms") {
@@ -199,12 +207,13 @@ fn insert_row(
     status: &str,
     model_id: &str,
     audio_bytes: i64,
+    audio_status: &str,
 ) -> rusqlite::Result<i64> {
     conn.execute(
         "INSERT INTO recordings
-            (created_at, transcript, language, mode_name, app_name, website, duration_secs, words, audio_path, status, model_id, audio_bytes)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-        params![created_at, transcript, language, mode_name, app_name, website, duration_secs, words, audio_path, status, model_id, audio_bytes],
+            (created_at, transcript, language, mode_name, app_name, website, duration_secs, words, audio_path, status, model_id, audio_bytes, audio_status)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![created_at, transcript, language, mode_name, app_name, website, duration_secs, words, audio_path, status, model_id, audio_bytes, audio_status],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -226,24 +235,28 @@ fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<HistoryItem> {
         status: row.get(12)?,
         model_id: row.get(13)?,
         audio_bytes: row.get(14)?,
-        transcription_ms: row.get(15)?,
+        audio_status: row.get(15)?,
+        transcription_ms: row.get(16)?,
         word_stamps: Vec::new(),
         speakers: Vec::new(),
     };
-    let (word_stamps, speakers) = parse_extra(row.get::<_, Option<String>>(16)?);
+    let (word_stamps, speakers) = parse_extra(row.get::<_, Option<String>>(17)?);
     item.word_stamps = word_stamps;
     item.speakers = speakers;
     Ok(item)
 }
 
 const SELECT_COLS: &str =
-    "id, created_at, transcript, language, mode_name, app_name, website, duration_secs, words, favorite, copy_count, audio_path, status, model_id, audio_bytes, transcription_ms, extra_json";
+    "id, created_at, transcript, language, mode_name, app_name, website, duration_secs, words, favorite, copy_count, audio_path, status, model_id, audio_bytes, audio_status, transcription_ms, extra_json";
 
-/// Persist the WAV + a `transcribing` row BEFORE transcription is attempted, so
-/// a recording is never lost to a network error. Returns (id, audio_path).
-pub fn insert_pending(
+fn next_recording_path(app: &AppHandle, created_at: i64) -> PathBuf {
+    let n = FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    recordings_dir(app).join(format!("rec-{created_at}-{n}.wav"))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn reserve_recording(
     app: &AppHandle,
-    pcm16: &[i16],
     language: &str,
     mode_name: &str,
     app_name: Option<&str>,
@@ -251,16 +264,8 @@ pub fn insert_pending(
     model_id: &str,
 ) -> Result<(i64, String), String> {
     let created_at = now_millis();
-    let n = FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path = recordings_dir(app).join(format!("rec-{created_at}-{n}.wav"));
-    write_wav(&path, pcm16, crate::resample::TARGET_RATE)?;
-
+    let path = next_recording_path(app, created_at);
     let path_str = path.to_string_lossy().to_string();
-    let duration = pcm16.len() as f64 / crate::resample::TARGET_RATE as f64;
-    let audio_bytes = std::fs::metadata(&path)
-        .map(|m| m.len() as i64)
-        .unwrap_or(0);
-
     let db = app.state::<HistoryDb>();
     let conn = db.0.lock().unwrap();
     let id = insert_row(
@@ -271,15 +276,24 @@ pub fn insert_pending(
         mode_name,
         app_name,
         website,
-        duration,
+        0.0,
         0,
         &path_str,
-        "transcribing",
+        "recording",
         model_id,
-        audio_bytes,
+        0,
+        "capturing",
     )
-    .map_err(|e| format!("insert recording: {e}"))?;
+    .map_err(|e| format!("reserve recording: {e}"))?;
     Ok((id, path_str))
+}
+
+pub fn mark_stopped(db: &HistoryDb, id: i64, duration_secs: f64, status: &str, audio_status: &str) {
+    let conn = db.0.lock().unwrap();
+    let _ = conn.execute(
+        "UPDATE recordings SET duration_secs = ?2, status = ?3, audio_status = ?4 WHERE id = ?1",
+        params![id, duration_secs, status, audio_status],
+    );
 }
 
 /// Update a row with the transcription result, final status, how long the
@@ -302,6 +316,16 @@ pub fn update_result(
     );
 }
 
+pub fn update_audio_result(db: &HistoryDb, id: i64, audio_bytes: i64, audio_status: &str) -> bool {
+    let conn = db.0.lock().unwrap();
+    conn.execute(
+        "UPDATE recordings SET audio_bytes = ?2, audio_status = ?3 WHERE id = ?1",
+        params![id, audio_bytes, audio_status],
+    )
+    .map(|n| n > 0)
+    .unwrap_or(false)
+}
+
 /// Set just the status (e.g. moving a row to `failed`/`needs_transcription`).
 pub fn set_status(db: &HistoryDb, id: i64, status: &str) {
     let conn = db.0.lock().unwrap();
@@ -309,6 +333,51 @@ pub fn set_status(db: &HistoryDb, id: i64, status: &str) {
         "UPDATE recordings SET status = ?2 WHERE id = ?1",
         params![id, status],
     );
+}
+
+pub fn set_audio_status(db: &HistoryDb, id: i64, status: &str) {
+    let conn = db.0.lock().unwrap();
+    let _ = conn.execute(
+        "UPDATE recordings SET audio_status = ?2 WHERE id = ?1",
+        params![id, status],
+    );
+}
+
+/// Reconcile rows interrupted while audio archival was in progress.
+pub fn reconcile_audio_status(app: &AppHandle) -> bool {
+    let db = app.state::<HistoryDb>();
+    let rows = {
+        let conn = db.0.lock().unwrap();
+        let mut stmt = match conn.prepare(&format!(
+            "SELECT {SELECT_COLS} FROM recordings WHERE audio_status IN ('capturing', 'saving')"
+        )) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("reconcile_audio_status prepare: {e}");
+                return false;
+            }
+        };
+        let rows = match stmt.query_map([], row_to_item) {
+            Ok(iter) => iter.filter_map(Result::ok).collect::<Vec<_>>(),
+            Err(e) => {
+                log::error!("reconcile_audio_status query: {e}");
+                return false;
+            }
+        };
+        rows
+    };
+    let mut changed = false;
+    for item in rows {
+        let path = Path::new(&item.audio_path);
+        if path.exists() {
+            let bytes = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0);
+            changed |= update_audio_result(&db, item.id, bytes, "ready");
+        } else {
+            set_audio_status(&db, item.id, "failed");
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// Rows currently in a given status (used by the retry worker).
@@ -531,6 +600,7 @@ mod tests {
             "done",
             "gpt-4o-transcribe",
             12345,
+            "ready",
         )
         .unwrap();
         assert_eq!(id, 1);
@@ -594,18 +664,19 @@ mod tests {
              VALUES (1, 'hi', 'en', 'M', 1.0, 1, '/tmp/a.wav');",
         )
         .unwrap();
-        // Running migrate twice must be safe and leave legacy rows as 'done'/''.
+        // Running migrate twice must be safe and leave legacy rows as done/ready.
         migrate(&conn).unwrap();
         migrate(&conn).unwrap();
-        let (status, model): (String, String) = conn
+        let (status, model, audio_status): (String, String, String) = conn
             .query_row(
-                "SELECT status, model_id FROM recordings WHERE id = 1",
+                "SELECT status, model_id, audio_status FROM recordings WHERE id = 1",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .unwrap();
         assert_eq!(status, "done");
         assert_eq!(model, "");
+        assert_eq!(audio_status, "ready");
     }
 
     #[test]
@@ -626,6 +697,7 @@ mod tests {
             "transcribing",
             "grok-stt",
             0,
+            "ready",
         )
         .unwrap();
         let db = HistoryDb(Mutex::new(conn));
@@ -634,8 +706,13 @@ mod tests {
         assert!(list_by_status(&db, "transcribing").is_empty());
         let item = get(&db, id).unwrap();
         assert_eq!(item.status, "done");
+        assert_eq!(item.audio_status, "ready");
         assert_eq!(item.words, 2);
         assert_eq!(item.transcription_ms, 1234);
+        update_audio_result(&db, id, 99, "failed");
+        let item = get(&db, id).unwrap();
+        assert_eq!(item.audio_bytes, 99);
+        assert_eq!(item.audio_status, "failed");
         set_status(&db, id, "failed");
         assert_eq!(list_by_status(&db, "failed").len(), 1);
     }
@@ -650,7 +727,7 @@ mod tests {
         // old + not favorite -> purged; old + favorite -> kept when keep_favorites; recent -> kept.
         let mk = |conn: &Connection, at: i64, fav: i64, path: &str| {
             let id = insert_row(
-                conn, at, "t", "en", "M", None, None, 1.0, 1, path, "done", "m", 100,
+                conn, at, "t", "en", "M", None, None, 1.0, 1, path, "done", "m", 100, "ready",
             )
             .unwrap();
             conn.execute(

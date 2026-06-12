@@ -31,44 +31,65 @@ pub fn on_recording_finished(
     rate: u32,
     ctx: RecordingContext,
     session: Option<RealtimeSession>,
+    id: i64,
+    audio_path: String,
 ) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         // Wall-clock starts at recording-stop (this is invoked right after capture
         // finishes), so it measures "time from shortcut release to transcript ready".
         let started = std::time::Instant::now();
-        let pcm16 = resample::resample_to_pcm16_24k(&samples, rate);
-        let lang_label = ctx.language.clone().unwrap_or_else(|| "auto".into());
-        let mode_name = ctx.mode_name.clone().unwrap_or_else(|| "—".into());
-
-        // Persist BEFORE transcription. Never lose a recording to a network error.
-        let (id, path) = match history::insert_pending(
-            &app,
-            &pcm16,
-            &lang_label,
-            &mode_name,
-            ctx.app_name.as_deref(),
-            ctx.website.as_deref(),
-            &ctx.model_id,
-        ) {
-            Ok(v) => v,
-            Err(e) => {
-                log::error!("failed to persist recording: {e}");
-                hud::hide_hud(&app);
-                return;
-            }
-        };
-        let _ = app.emit(events::HISTORY_CHANGED, ());
 
         // Transcribe: a live session is already streaming (finish it); every
         // other model transcribes the saved WAV via its provider's file API.
         let result = match session {
-            Some(session) => session.finish().await,
-            None => transcribe_file(&app, &ctx, &path).await,
+            Some(session) => {
+                archive_audio(app.clone(), id, audio_path, samples, rate);
+                session.finish().await
+            }
+            None => match archive_audio_now(&app, id, &audio_path, samples, rate).await {
+                Ok(()) => transcribe_file(&app, &ctx, &audio_path).await,
+                Err(e) => {
+                    let db = app.state::<HistoryDb>();
+                    history::set_audio_status(&db, id, "failed");
+                    let _ = app.emit(events::HISTORY_CHANGED, ());
+                    Err(e)
+                }
+            },
         };
 
         finalize(&app, id, &ctx, result, started.elapsed().as_millis() as i64);
     });
+}
+
+fn archive_audio(app: AppHandle, id: i64, path: String, samples: Vec<f32>, rate: u32) {
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = archive_audio_now(&app, id, &path, samples, rate).await {
+            log::error!("audio archive failed (id {id}): {e}");
+            let db = app.state::<HistoryDb>();
+            history::set_audio_status(&db, id, "failed");
+            let _ = app.emit(events::HISTORY_CHANGED, ());
+        }
+    });
+}
+
+async fn archive_audio_now(
+    app: &AppHandle,
+    id: i64,
+    path: &str,
+    samples: Vec<f32>,
+    rate: u32,
+) -> Result<(), String> {
+    let pcm16 = resample::resample_to_pcm16_24k(&samples, rate);
+    history::write_wav(std::path::Path::new(path), &pcm16, resample::TARGET_RATE)?;
+    let bytes = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0);
+    let db = app.state::<HistoryDb>();
+    if !history::update_audio_result(&db, id, bytes, "ready") {
+        let _ = std::fs::remove_file(path);
+        return Ok(());
+    }
+    let _ = app.emit(events::HISTORY_CHANGED, ());
+    Ok(())
 }
 
 /// Transcribe the saved WAV through the active mode's model + capability options.

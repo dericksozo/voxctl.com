@@ -33,6 +33,7 @@ const SAMPLE_RATE: usize = 24000;
 const MANUAL_COMMIT_SILENCE_MS: u32 = 1500;
 const MANUAL_COMMIT_SILENCE_SAMPLES: usize = SAMPLE_RATE * MANUAL_COMMIT_SILENCE_MS as usize / 1000;
 const MANUAL_COMMIT_RMS_THRESHOLD: f32 = 0.01;
+const FINAL_GRACE: Duration = Duration::from_secs(2);
 const READ_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Namespace for the OpenAI realtime live-transcription session opener. Saved
@@ -394,14 +395,45 @@ async fn run_session(
         Ok::<String, String>(transcript.text())
     };
 
-    let result = timeout(READ_TIMEOUT, read_final).await.unwrap_or_else(|_| {
-        let text = transcript.text();
-        if text.is_empty() {
-            Err("transcription timed out".into())
-        } else {
-            Ok(text)
+    let result = match timeout(FINAL_GRACE, read_final).await {
+        Ok(result) => result,
+        Err(_) => {
+            let text = transcript.text();
+            if !text.is_empty() {
+                log::info!("openai realtime using best-available transcript after grace timeout");
+                Ok(text)
+            } else {
+                let read_final = async {
+                    while pending_commits > 0 || awaiting_final_commit {
+                        match handle_frame(read.next().await, &mut transcript) {
+                            Ok(FrameSignal::Committed) => {
+                                awaiting_final_commit = false;
+                            }
+                            Ok(FrameSignal::Completed) => {
+                                pending_commits = pending_commits.saturating_sub(1)
+                            }
+                            Ok(FrameSignal::Closed) => break,
+                            Ok(FrameSignal::Continue) => {}
+                            Err(e) if awaiting_final_commit && is_empty_commit_error(&e) => {
+                                awaiting_final_commit = false;
+                                pending_commits = pending_commits.saturating_sub(1);
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    Ok::<String, String>(transcript.text())
+                };
+                timeout(READ_TIMEOUT, read_final).await.unwrap_or_else(|_| {
+                    let text = transcript.text();
+                    if text.is_empty() {
+                        Err("transcription timed out".into())
+                    } else {
+                        Ok(text)
+                    }
+                })
+            }
         }
-    });
+    };
 
     let _ = write.send(Message::Close(None)).await;
     result

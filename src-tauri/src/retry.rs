@@ -29,11 +29,16 @@ pub struct RetryState(pub Mutex<HashMap<i64, u32>>);
 pub fn spawn(app: AppHandle) {
     // Any row still `transcribing` at startup was interrupted (e.g. a crash or
     // quit mid-call). Move it to `failed` so it gets retried.
-    let interrupted = history::list_by_status(&app.state::<HistoryDb>(), "transcribing");
+    let mut interrupted = history::list_by_status(&app.state::<HistoryDb>(), "transcribing");
+    interrupted.extend(history::list_by_status(
+        &app.state::<HistoryDb>(),
+        "recording",
+    ));
     for item in &interrupted {
         history::set_status(&app.state::<HistoryDb>(), item.id, "failed");
     }
-    if !interrupted.is_empty() {
+    let audio_changed = history::reconcile_audio_status(&app);
+    if !interrupted.is_empty() || audio_changed {
         let _ = app.emit(events::HISTORY_CHANGED, ());
     }
 

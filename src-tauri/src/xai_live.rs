@@ -29,6 +29,7 @@ use crate::transcription::RealtimeSession;
 const BASE: &str = "wss://api.x.ai/v1/stt";
 /// Matches the capture forwarder's output rate (resample::TARGET_RATE).
 const SAMPLE_RATE: u32 = 24000;
+const FINAL_GRACE: Duration = Duration::from_secs(2);
 const READ_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Open a live xAI transcription session. Audio is pushed via the returned
@@ -164,10 +165,15 @@ impl Accumulator {
     }
 
     fn final_output(&self) -> TranscriptOutput {
+        let speakers = if self.speakers.is_empty() {
+            file_transcribe::group_words_to_speakers(&self.words)
+        } else {
+            self.speakers.clone()
+        };
         TranscriptOutput {
             text: self.joined(),
             words: self.words.clone(),
-            speakers: self.speakers.clone(),
+            speakers,
         }
     }
 }
@@ -284,8 +290,10 @@ async fn run_session(
         }
     }
 
-    // Phase 2: read until the final transcript (or timeout).
-    let drain = async {
+    // Phase 2: read until the final transcript. If xAI's final completion lags
+    // but streamed text is already available, prefer delivering that transcript
+    // after a short grace period over keeping the user in "processing".
+    let grace = async {
         loop {
             match handle_frame(read.next().await, &mut acc)? {
                 Flow::Done | Flow::Closed => {
@@ -295,14 +303,35 @@ async fn run_session(
             }
         }
     };
-    let result = timeout(READ_TIMEOUT, drain).await.unwrap_or_else(|_| {
-        let out = acc.final_output();
-        if out.text.is_empty() {
-            Err("xai transcription timed out".into())
-        } else {
-            Ok(out)
+    let result = match timeout(FINAL_GRACE, grace).await {
+        Ok(result) => result,
+        Err(_) => {
+            let out = acc.final_output();
+            if !out.text.is_empty() {
+                log::info!("xai live using best-available transcript after grace timeout");
+                Ok(out)
+            } else {
+                let drain = async {
+                    loop {
+                        match handle_frame(read.next().await, &mut acc)? {
+                            Flow::Done | Flow::Closed => {
+                                return Ok::<TranscriptOutput, String>(acc.final_output())
+                            }
+                            Flow::Continue => {}
+                        }
+                    }
+                };
+                timeout(READ_TIMEOUT, drain).await.unwrap_or_else(|_| {
+                    let out = acc.final_output();
+                    if out.text.is_empty() {
+                        Err("xai transcription timed out".into())
+                    } else {
+                        Ok(out)
+                    }
+                })
+            }
         }
-    });
+    };
     let _ = write.send(Message::Close(None)).await;
     result
 }
@@ -379,6 +408,26 @@ mod tests {
         a.observe("unfinished tail", false);
         a.done(&json!({}), ""); // empty done must not drop the tail
         assert_eq!(a.final_text(), "Committed one. unfinished tail");
+    }
+
+    #[test]
+    fn speaker_segments_are_derived_from_word_speakers() {
+        let mut a = Accumulator::default();
+        assert!(a.observe("Hello there. General Kenobi.", true));
+        a.capture_structured(&json!({
+            "words": [
+                { "word": "Hello", "start": 0.0, "end": 0.2, "speaker": "0" },
+                { "word": "there.", "start": 0.2, "end": 0.5, "speaker": "0" },
+                { "word": "General", "start": 0.8, "end": 1.1, "speaker": "1" },
+                { "word": "Kenobi.", "start": 1.1, "end": 1.5, "speaker": "1" }
+            ]
+        }));
+        let out = a.final_output();
+        assert_eq!(out.speakers.len(), 2);
+        assert_eq!(out.speakers[0].speaker, "0");
+        assert_eq!(out.speakers[0].text, "Hello there.");
+        assert_eq!(out.speakers[1].speaker, "1");
+        assert_eq!(out.speakers[1].text, "General Kenobi.");
     }
 
     /// Live streaming smoke test. Streams a WAV's PCM to the xAI WS and prints
