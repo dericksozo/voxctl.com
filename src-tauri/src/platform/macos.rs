@@ -64,7 +64,7 @@ fn frontmost_pid() -> Option<i32> {
 pub fn focused_url() -> Option<String> {
     use accessibility_sys::{
         kAXErrorSuccess, AXUIElementCopyAttributeValue, AXUIElementCreateApplication,
-        AXUIElementRef,
+        AXUIElementRef, AXUIElementSetMessagingTimeout,
     };
     use core_foundation::base::{CFGetTypeID, CFRelease, CFTypeRef, TCFType};
     use core_foundation::string::{CFString, CFStringRef};
@@ -108,21 +108,28 @@ pub fn focused_url() -> Option<String> {
     /// and release it after processing, so nothing leaks even when we stop early.
     unsafe fn find_url_in_tree(root: AXUIElementRef) -> Option<String> {
         use std::collections::VecDeque;
-        const MAX_VISITS: usize = 1500;
+        // The AXWebArea sits shallow in the window tree, and breadth-first search
+        // reaches it before descending into the deep web-content subtree (we stop
+        // expanding once found). These caps therefore only bound the *give-up*
+        // traversal on non-browser windows (no AXURL anywhere) — keeping the
+        // focused-URL probe off the record-start hot path's tail (perf §1.1). A
+        // too-tight bound merely degrades to app-only matching, never incorrect.
+        const MAX_VISITS: usize = 600;
+        const MAX_DEPTH: usize = 12;
 
-        let mut queue: VecDeque<AXUIElementRef> = VecDeque::new();
+        let mut queue: VecDeque<(AXUIElementRef, usize)> = VecDeque::new();
         CFRetain(root as CFTypeRef);
-        queue.push_back(root);
+        queue.push_back((root, 0));
 
         let mut found = None;
         let mut visited = 0usize;
-        while let Some(el) = queue.pop_front() {
+        while let Some((el, depth)) = queue.pop_front() {
             if found.is_none() {
                 visited += 1;
                 if let Some(url_val) = copy_attr(el, "AXURL") {
                     found = url_string(url_val);
                 }
-                if found.is_none() && visited < MAX_VISITS {
+                if found.is_none() && visited < MAX_VISITS && depth < MAX_DEPTH {
                     if let Some(kids) = copy_attr(el, "AXChildren") {
                         if CFGetTypeID(kids) == CFArrayGetTypeID() {
                             let arr = kids as CFArrayRef;
@@ -131,7 +138,7 @@ pub fn focused_url() -> Option<String> {
                                 let child = CFArrayGetValueAtIndex(arr, i) as AXUIElementRef;
                                 if !child.is_null() {
                                     CFRetain(child as CFTypeRef);
-                                    queue.push_back(child);
+                                    queue.push_back((child, depth + 1));
                                 }
                             }
                         }
@@ -150,6 +157,10 @@ pub fn focused_url() -> Option<String> {
         if app_el.is_null() {
             return None;
         }
+        // Cap each AX IPC message so a hung/busy target app can't stall the probe
+        // — and thus record-start — for seconds (perf §1.1). Set on the app
+        // element, it applies to all messaging through it and its descendants.
+        AXUIElementSetMessagingTimeout(app_el, 0.15);
 
         let mut result = None;
 
