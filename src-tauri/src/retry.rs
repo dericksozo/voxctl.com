@@ -89,7 +89,7 @@ async fn retry_failed(app: &AppHandle) {
             continue;
         };
         let started = std::time::Instant::now();
-        match transcriber.transcribe_file(&wav, &opts).await {
+        match transcriber.transcribe_file(wav, &opts).await {
             Ok(out) if !out.text.trim().is_empty() => {
                 let language = crate::lang_detect::resolve(opts.language.as_deref(), &out.text);
                 history::update_result(
