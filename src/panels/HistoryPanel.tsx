@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { t } from "../i18n";
-import { deleteRecording, incrementCopy, retranscribe } from "../lib/ipc";
+import { deleteRecording, getHistoryDetail, incrementCopy, retranscribe } from "../lib/ipc";
 import type { HistoryItem, Mode, SpeakerSeg, WordStamp } from "../lib/types";
 import {
   estimateCost,
@@ -372,6 +372,11 @@ export function HistoryPanel({
   const [warnFor, setWarnFor] = useState<{ id: number; modeId: string } | null>(null);
   // Cards whose last re-run requested diarization but got no speaker labels.
   const [diarDropped, setDiarDropped] = useState<Set<number>>(new Set());
+  // Lazily-fetched word/speaker detail per recording id (the arrays the list
+  // omits, §4.1). Populated when a card expands; reused while it stays open.
+  const [detail, setDetail] = useState<Map<number, { wordStamps: WordStamp[]; speakers: SpeakerSeg[] }>>(
+    () => new Map(),
+  );
   // Search — the only list control on Home.
   const [query, setQuery] = useState("");
   // Batch rendering: render a page of cards and grow as the sentinel scrolls in.
@@ -417,6 +422,25 @@ export function HistoryPanel({
     setWarnFor(null);
     setTab("text");
   }, [expanded]);
+
+  // Fetch word/speaker detail for the expanded card if it has any and we haven't
+  // already. The list ships only boolean flags; the (possibly large) arrays load
+  // on demand here so a big diarized archive doesn't pay for them up front.
+  useEffect(() => {
+    if (expanded == null) return;
+    const item = (history ?? []).find((h) => h.id === expanded);
+    if (!item || !(item.hasWordStamps || item.hasSpeakers)) return;
+    if (detail.has(expanded)) return;
+    let cancelled = false;
+    getHistoryDetail(expanded)
+      .then((d) => {
+        if (!cancelled) setDetail((prev) => new Map(prev).set(expanded, d));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [expanded, history, detail]);
 
   async function doCopy(e: React.MouseEvent, item: HistoryItem, text?: string) {
     e.stopPropagation();
@@ -493,6 +517,10 @@ export function HistoryPanel({
     try {
       const res = await retranscribe(item.id, modeId);
       onChange();
+      // The re-run rewrote this recording's words/speakers — refresh its detail.
+      getHistoryDetail(item.id)
+        .then((d) => setDetail((prev) => new Map(prev).set(item.id, d)))
+        .catch(() => {});
       // Persist (or clear) the "no speaker labels" notice for this card based on
       // what the just-completed re-run actually returned.
       setDiarDropped((prev) => {
@@ -776,14 +804,23 @@ export function HistoryPanel({
                 const costVal = estimateCost(modelById(registry, item.modelId), item.durationSecs);
                 const cost = costVal > 0 ? formatCost(costVal) : "";
                 const hasText = !!item.transcript?.trim();
-                const speakerSegs = speakerSegments(item);
-                // Structured-data tabs appear only when the provider returned them.
+                // Structured-data tabs gate on the cheap list flags; the arrays
+                // themselves are fetched lazily on expand (§4.1).
                 const tabs: { key: TabKey; label: string }[] = [
                   { key: "text", label: t("history.tabText") },
                 ];
-                if (item.wordStamps?.length) tabs.push({ key: "stamps", label: t("history.tabStamps") });
-                if (speakerSegs.length) tabs.push({ key: "speakers", label: t("history.tabSpeakers") });
+                if (item.hasWordStamps) tabs.push({ key: "stamps", label: t("history.tabStamps") });
+                if (item.hasSpeakers) tabs.push({ key: "speakers", label: t("history.tabSpeakers") });
                 const effTab: TabKey = tabs.some((x) => x.key === tab) ? tab : "text";
+                // Lazily-loaded detail for the expanded card (empty until it arrives).
+                const d = exp ? detail.get(item.id) : undefined;
+                const expWordStamps = d?.wordStamps ?? [];
+                const expSpeakers = d?.speakers ?? [];
+                const expSpeakerSegs = exp
+                  ? speakerSegments({ ...item, wordStamps: expWordStamps, speakers: expSpeakers })
+                  : [];
+                const detailLoading = exp && (item.hasWordStamps || item.hasSpeakers) && d == null;
+                const copyItem: HistoryItem = { ...item, wordStamps: expWordStamps, speakers: expSpeakers };
                 return (
                   <div
                     key={item.id}
@@ -873,9 +910,11 @@ export function HistoryPanel({
                           </div>
                         ) : null}
 
-                        {effTab === "stamps" ? (
+                        {detailLoading && (effTab === "stamps" || effTab === "speakers") ? (
+                          <div className="hm-text placeholder">…</div>
+                        ) : effTab === "stamps" ? (
                           <div className="hm-stamps">
-                            {item.wordStamps.map((w, i) => (
+                            {expWordStamps.map((w, i) => (
                               <span key={`${i}-${w.start}`} className="hm-stamp">
                                 <span className="hm-stamp-t">{tcLabel(w.start)}</span>
                                 <span className="hm-stamp-w">{w.word}</span>
@@ -884,7 +923,7 @@ export function HistoryPanel({
                           </div>
                         ) : effTab === "speakers" ? (
                           <div className="hm-speakers">
-                            {speakerSegs.map((s, i) => (
+                            {expSpeakerSegs.map((s, i) => (
                               <div key={`${i}-${s.start}`} className="hm-spk">
                                 <span className="hm-spk-k">{speakerLabel(s.speaker)}</span>
                                 <span className="hm-spk-t">{s.text}</span>
@@ -918,7 +957,7 @@ export function HistoryPanel({
                             type="button"
                             className={"vx-btn" + (cp ? " vx-btn--mag" : "")}
                             disabled={!hasText}
-                            onClick={(e) => doCopy(e, item, copyTextFor(item, effTab))}
+                            onClick={(e) => doCopy(e, item, copyTextFor(copyItem, effTab))}
                           >
                             {cp ? <IcoCheck size={14} /> : <IcoCopy size={14} />}
                             {cp ? t("history.copied") : t("history.copy")}

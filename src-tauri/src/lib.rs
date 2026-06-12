@@ -151,6 +151,7 @@ pub fn run() {
             commands::permissions::request_notification_permission,
             commands::permissions::open_permission_settings,
             commands::history::list_history,
+            commands::history::get_history_detail,
             commands::history::delete_recording,
             commands::history::delete_recordings,
             commands::history::toggle_favorite,

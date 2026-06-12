@@ -42,11 +42,21 @@ pub struct HistoryItem {
     /// in milliseconds (0 until a transcription completes).
     pub transcription_ms: i64,
     /// Per-word timing (present only when the mode/model produced word timestamps).
+    /// Empty in list payloads — fetched lazily via detail() on expand (perf §4.1).
     #[serde(default)]
     pub word_stamps: Vec<WordStamp>,
     /// Speaker-attributed segments (present only when diarization produced them).
+    /// Empty in list payloads — see word_stamps.
     #[serde(default)]
     pub speakers: Vec<SpeakerSeg>,
+    /// Whether word-level timestamps exist (gates the STAMPS tab without shipping
+    /// the potentially-MB word array). Always set; the array is fetched on expand.
+    #[serde(default)]
+    pub has_word_stamps: bool,
+    /// Whether speaker info exists — top-level segments OR word-level speaker
+    /// labels (matches the UI's speakerSegments()). Gates the SPEAKERS tab.
+    #[serde(default)]
+    pub has_speakers: bool,
 }
 
 /// Parse the persisted `extra_json` blob (`{ words, speakers }`) into the typed
@@ -249,8 +259,12 @@ fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<HistoryItem> {
         transcription_ms: row.get(16)?,
         word_stamps: Vec::new(),
         speakers: Vec::new(),
+        has_word_stamps: false,
+        has_speakers: false,
     };
     let (word_stamps, speakers) = parse_extra(row.get::<_, Option<String>>(17)?);
+    item.has_word_stamps = !word_stamps.is_empty();
+    item.has_speakers = !speakers.is_empty() || word_stamps.iter().any(|w| w.speaker.is_some());
     item.word_stamps = word_stamps;
     item.speakers = speakers;
     Ok(item)
@@ -258,6 +272,43 @@ fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<HistoryItem> {
 
 const SELECT_COLS: &str =
     "id, created_at, transcript, language, mode_name, app_name, website, duration_secs, words, favorite, copy_count, audio_path, status, model_id, audio_bytes, audio_status, transcription_ms, extra_json";
+
+/// Columns for the list view: everything in SELECT_COLS *except* extra_json, plus
+/// two cheap flags derived in SQL. The (potentially MB) word/speaker arrays never
+/// leave SQLite or cross IPC — fetched lazily via detail() on expand (perf §4.1).
+/// instr() matches a field key *with its colon* (`"word":` / `"speaker":`), which
+/// never collides with the plural top-level keys (`"words"` / `"speakers"`):
+///   - any `"word":`    ⟺ the words array is non-empty (STAMPS tab)
+///   - any `"speaker":` ⟺ a SpeakerSeg or a word-level speaker exists (SPEAKERS tab)
+const LIST_COLS: &str = "id, created_at, transcript, language, mode_name, app_name, website, duration_secs, words, favorite, copy_count, audio_path, status, model_id, audio_bytes, audio_status, transcription_ms, (COALESCE(instr(extra_json, '\"word\":'), 0) > 0), (COALESCE(instr(extra_json, '\"speaker\":'), 0) > 0)";
+
+/// Row → list item: full metadata + transcript, but no word/speaker arrays (the
+/// flags at columns 17/18 gate the detail tabs instead). See LIST_COLS.
+fn row_to_list_item(row: &rusqlite::Row) -> rusqlite::Result<HistoryItem> {
+    Ok(HistoryItem {
+        id: row.get(0)?,
+        created_at: row.get(1)?,
+        transcript: row.get(2)?,
+        language: row.get(3)?,
+        mode_name: row.get(4)?,
+        app_name: row.get(5)?,
+        website: row.get(6)?,
+        duration_secs: row.get(7)?,
+        words: row.get(8)?,
+        favorite: row.get::<_, i64>(9)? != 0,
+        copy_count: row.get(10)?,
+        audio_path: row.get(11)?,
+        status: row.get(12)?,
+        model_id: row.get(13)?,
+        audio_bytes: row.get(14)?,
+        audio_status: row.get(15)?,
+        transcription_ms: row.get(16)?,
+        word_stamps: Vec::new(),
+        speakers: Vec::new(),
+        has_word_stamps: row.get::<_, i64>(17)? != 0,
+        has_speakers: row.get::<_, i64>(18)? != 0,
+    })
+}
 
 fn next_recording_path(app: &AppHandle, created_at: i64) -> PathBuf {
     let n = FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -440,7 +491,7 @@ pub fn list(db: &HistoryDb) -> Vec<HistoryItem> {
     // pagination work (perf/06) is provable. Cheap; gated behind `debug`.
     let t0 = std::time::Instant::now();
     let conn = db.0.lock().unwrap();
-    let sql = format!("SELECT {SELECT_COLS} FROM recordings ORDER BY created_at DESC");
+    let sql = format!("SELECT {LIST_COLS} FROM recordings ORDER BY created_at DESC");
     let mut stmt = match conn.prepare(&sql) {
         Ok(s) => s,
         Err(e) => {
@@ -448,7 +499,7 @@ pub fn list(db: &HistoryDb) -> Vec<HistoryItem> {
             return Vec::new();
         }
     };
-    let rows = stmt.query_map([], row_to_item);
+    let rows = stmt.query_map([], row_to_list_item);
     let items: Vec<HistoryItem> = match rows {
         Ok(iter) => iter.filter_map(Result::ok).collect(),
         Err(e) => {
@@ -468,6 +519,32 @@ pub fn get(db: &HistoryDb, id: i64) -> Option<HistoryItem> {
     let conn = db.0.lock().unwrap();
     let sql = format!("SELECT {SELECT_COLS} FROM recordings WHERE id = ?1");
     conn.query_row(&sql, params![id], row_to_item).ok()
+}
+
+/// Lazily-fetched structured detail for one recording — the word/speaker arrays
+/// the list view omits (perf §4.1). Fetched when a history card is expanded.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryDetail {
+    pub word_stamps: Vec<WordStamp>,
+    pub speakers: Vec<SpeakerSeg>,
+}
+
+/// Word/speaker detail for a single recording (just the one row's extra_json).
+pub fn detail(db: &HistoryDb, id: i64) -> Option<HistoryDetail> {
+    let conn = db.0.lock().unwrap();
+    let extra: Option<String> = conn
+        .query_row(
+            "SELECT extra_json FROM recordings WHERE id = ?1",
+            params![id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .ok()?;
+    let (word_stamps, speakers) = parse_extra(extra);
+    Some(HistoryDetail {
+        word_stamps,
+        speakers,
+    })
 }
 
 /// Delete a row; returns the audio path so the caller can remove the file.
