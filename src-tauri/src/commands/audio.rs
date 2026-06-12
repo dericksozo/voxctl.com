@@ -122,7 +122,12 @@ fn start_capture(
 
     let stop = Arc::new(AtomicBool::new(false));
     let level = Arc::new(AtomicU32::new(0));
-    let samples = Arc::new(Mutex::new(Vec::<f32>::new()));
+    // Pre-size for ~60s of mono audio so the callback's first minute never
+    // reallocates; the level loop keeps the headroom topped up after that, so the
+    // (large) reallocations never land inside the realtime callback (§2.4).
+    let samples = Arc::new(Mutex::new(Vec::<f32>::with_capacity(
+        (sample_rate as usize).saturating_mul(60),
+    )));
 
     let stop_t = stop.clone();
     let level_t = level.clone();
@@ -193,11 +198,19 @@ fn start_capture(
         }
         log::debug!("perf: press→record {} ms", t0.elapsed().as_millis());
 
-        // Emit the level ~16x/sec while recording. Sleeps, so no busy loop.
+        // Emit the level ~16x/sec while recording. Sleeps, so no busy loop. Also
+        // tops up the sample buffer's capacity off the realtime thread so the
+        // callback's extend_from_slice never has to reallocate mid-lock (§2.4).
+        let rate_usize = sample_rate as usize;
         while !stop_t.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(60));
             let lvl = f32::from_bits(level_t.load(Ordering::Relaxed));
             let _ = app_t.emit(events::MIC_LEVEL, MicLevel { db: lvl, peak: lvl });
+            if let Ok(mut v) = samples_t.lock() {
+                if v.capacity().saturating_sub(v.len()) < rate_usize {
+                    v.reserve(rate_usize * 30);
+                }
+            }
         }
         drop(stream); // closes the stream on this thread (cpal Stream is !Send)
     });
