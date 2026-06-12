@@ -280,24 +280,36 @@ impl FileTranscriber for OpenAiFileTranscriber {
         wav: &[u8],
         opts: &TranscribeOptions,
     ) -> Result<TranscriptOutput, String> {
+        // gpt-4o-transcribe-diarize is a separate request shape: it returns speaker
+        // labels via `diarized_json`, requires `chunking_strategy`, and rejects
+        // `prompt` / `timestamp_granularities[]`.
+        let diarize = self.model == "gpt-4o-transcribe-diarize";
         // Only whisper-1 returns word timestamps, and only via verbose_json; the
         // gpt-4o transcribe models support json only.
-        let want_words = opts.word_timestamps;
+        let want_words = opts.word_timestamps && !diarize;
+        let response_format = if diarize {
+            "diarized_json"
+        } else if want_words {
+            "verbose_json"
+        } else {
+            "json"
+        };
         let mut form = reqwest::multipart::Form::new()
             .text("model", self.model.clone())
-            .text(
-                "response_format",
-                if want_words { "verbose_json" } else { "json" },
-            )
+            .text("response_format", response_format)
             .part("file", wav_part(wav)?);
+        if diarize {
+            // Required by the diarize model (audio > 30s); "auto" lets OpenAI chunk.
+            form = form.text("chunking_strategy", "auto");
+        }
         if want_words {
             form = form.text("timestamp_granularities[]", "word");
         }
         if let Some(l) = opts.lang() {
             form = form.text("language", l.to_string());
         }
-        if !opts.keywords.is_empty() {
-            // `prompt` biases vocabulary/spelling for the file models.
+        if !diarize && !opts.keywords.is_empty() {
+            // `prompt` biases vocabulary/spelling for the file models (not diarize).
             form = form.text("prompt", opts.keywords.join(", "));
         }
         let resp = client()?
@@ -313,21 +325,33 @@ impl FileTranscriber for OpenAiFileTranscriber {
             return Err(format!("openai transcribe {status}: {}", truncate(&body)));
         }
         let v: Value = serde_json::from_str(&body).map_err(|e| format!("parse: {e}"))?;
-        let text = v
+        let mut text = v
             .get("text")
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        // whisper-1 has no diarization; only word timestamps via verbose_json.
-        let words = if want_words {
-            parse_words(&v)
+        // diarize returns speaker segments; whisper-1 returns word timestamps via
+        // verbose_json. Everything else is text-only.
+        let (words, speakers) = if diarize {
+            parse_structured(&v)
+        } else if want_words {
+            (parse_words(&v), Vec::new())
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
+        // `diarized_json` may omit a top-level `text`; rebuild the flat transcript
+        // from the speaker segments so delivery (paste/clipboard) still works.
+        if diarize && text.trim().is_empty() {
+            text = speakers
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
         Ok(TranscriptOutput {
             text,
             words,
-            speakers: Vec::new(),
+            speakers,
         })
     }
 }

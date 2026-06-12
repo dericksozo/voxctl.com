@@ -8,15 +8,8 @@ import { useConfig } from "../hooks/useConfig";
 import { t } from "../i18n";
 import { AVAILABLE_LOCALES } from "../i18n";
 import { LANGUAGES } from "../lib/languages";
-import {
-  openPermissionSettings,
-  purgeRecordings,
-  requestAccessibility,
-  requestMicrophone,
-  requestNotificationPermission,
-  storageStats,
-} from "../lib/ipc";
-import type { CaptureMode, DeleteBehavior, PermissionStatus, StorageStats } from "../lib/types";
+import { purgeRecordings, requestNotificationPermission, storageStats } from "../lib/ipc";
+import type { CaptureMode, DeleteBehavior, StorageStats } from "../lib/types";
 import {
   providerValidated,
   type ProviderStatus,
@@ -52,16 +45,12 @@ export function SettingsPanel({
   registry,
   providers,
   refreshProviders,
-  perms,
-  refreshPerms,
   recording,
   onSection,
 }: {
   registry: Registry | null;
   providers: ProviderStatus;
   refreshProviders: () => void;
-  perms: PermissionStatus;
-  refreshPerms: () => void;
   recording: boolean;
   onSection: (s: { label: string; desc: string } | null) => void;
 }) {
@@ -105,7 +94,12 @@ export function SettingsPanel({
 
   return (
     <div className="panel-body settings" ref={bodyRef}>
-      {recording ? <div className="vx-set-rec">RECORDING IN PROGRESS</div> : null}
+      {recording ? (
+        <div className="vx-set-rec">
+          <span className="vx-set-rec-title">{t("settings.rec.title")}</span>
+          <span className="vx-set-rec-sub">{t("settings.rec.sub")}</span>
+        </div>
+      ) : null}
 
       <section className="set-section" data-sec="providers">
         <SectionHead id="providers" />
@@ -126,87 +120,99 @@ export function SettingsPanel({
 
       <section className="set-section" data-sec="capture">
         <SectionHead id="capture" />
-        <div className="vx-set-card">
-          <div className="vx-set-row">
-            <div className="vx-set-card-text">
-              <div className="vx-set-card-label">{t("settings.capture")}</div>
+        <div className="vx-set-field">
+          <div className="vx-set-grid-2">
+            <div className="vx-set-card">
+              <div className="vx-set-row">
+                <div className="vx-set-card-text">
+                  <div className="vx-set-card-label">{t("settings.capture")}</div>
+                </div>
+                <Segmented<CaptureMode>
+                  value={config.captureMode}
+                  options={[
+                    { value: "toggle", label: t("settings.toggle") },
+                    { value: "ptt", label: t("settings.ptt") },
+                  ]}
+                  onChange={(v) => set("captureMode", v, { reloadShortcut: true })}
+                  disabled={recording}
+                />
+              </div>
             </div>
-            <Segmented<CaptureMode>
-              value={config.captureMode}
-              options={[
-                { value: "toggle", label: t("settings.toggle") },
-                { value: "ptt", label: t("settings.ptt") },
-              ]}
-              onChange={(v) => set("captureMode", v, { reloadShortcut: true })}
-              disabled={recording}
-            />
+            <div className="vx-set-card">
+              <div className="vx-set-row">
+                <div className="vx-set-card-text">
+                  <div className="vx-set-card-label">{t("settings.shortcut")}</div>
+                </div>
+                <ShortcutRecorder
+                  value={config.shortcut}
+                  onChange={(s) => set("shortcut", s, { reloadShortcut: true })}
+                  disabled={recording}
+                />
+              </div>
+            </div>
           </div>
-          <div className="vx-set-card-hint">
+          <p className="vx-set-field-desc">
             {config.captureMode === "toggle" ? t("settings.captureHint.toggle") : t("settings.captureHint.ptt")}
-          </div>
-        </div>
-        <div className="vx-set-card">
-          <div className="vx-set-row">
-            <div className="vx-set-card-text">
-              <div className="vx-set-card-label">{t("settings.shortcut")}</div>
-            </div>
-            <ShortcutRecorder
-              value={config.shortcut}
-              onChange={(s) => set("shortcut", s, { reloadShortcut: true })}
-              disabled={recording}
-            />
-          </div>
+          </p>
         </div>
       </section>
 
       <section className="set-section" data-sec="transcription">
         <SectionHead id="transcription" />
-        <div className="vx-set-card vx-set-card--stack">
-          <div className="vx-set-card-label">{t("settings.transcriptionLanguage")}</div>
-          <select
-            className="set-select"
-            value={config.defaultLanguage ?? "auto"}
-            onChange={(e) => set("defaultLanguage", e.target.value === "auto" ? null : e.target.value)}
-            disabled={recording}
-          >
-            {LANGUAGES.map((l) => (
-              <option key={l.code} value={l.code}>
-                {l.code === "auto" ? t("settings.autoDetect") : l.label}
-              </option>
-            ))}
-          </select>
-          <div className="vx-set-card-hint">{t("settings.alwaysSave")}</div>
+        <div className="vx-set-field">
+          <div className="vx-set-card vx-set-card--stack">
+            <div className="vx-set-card-label">{t("settings.transcriptionLanguage")}</div>
+            <select
+              className="set-select"
+              value={config.defaultLanguage ?? "auto"}
+              onChange={(e) => set("defaultLanguage", e.target.value === "auto" ? null : e.target.value)}
+              disabled={recording}
+            >
+              {LANGUAGES.map((l) => (
+                <option key={l.code} value={l.code}>
+                  {l.code === "auto" ? t("settings.autoDetect") : l.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="vx-set-field-desc">{t("settings.alwaysSave")}</p>
         </div>
       </section>
 
       <section className="set-section" data-sec="audio">
         <SectionHead id="audio" />
-        <div className="vx-set-card">
-          <div className="vx-set-row">
-            <div className="vx-set-card-text">
-              <div className="vx-set-card-label">{t("settings.sfx")}</div>
-              <div className="vx-set-card-sub">{t("settings.sfxSub")}</div>
+        <div className="vx-set-grid-2">
+          <div className="vx-set-field">
+            <div className="vx-set-card">
+              <div className="vx-set-row">
+                <div className="vx-set-card-text">
+                  <div className="vx-set-card-label">{t("settings.sfx")}</div>
+                </div>
+                <Toggle
+                  on={config.sfxEnabled}
+                  onToggle={() => set("sfxEnabled", !config.sfxEnabled)}
+                  labels={[t("settings.sfxOn"), t("settings.sfxOff")]}
+                  disabled={recording}
+                />
+              </div>
             </div>
-            <Toggle
-              on={config.sfxEnabled}
-              onToggle={() => set("sfxEnabled", !config.sfxEnabled)}
-              labels={[t("settings.sfxOn"), t("settings.sfxOff")]}
-              disabled={recording}
-            />
+            <p className="vx-set-field-desc">{t("settings.sfxSub")}</p>
           </div>
-        </div>
-        <div className="vx-set-card">
-          <div className="vx-set-row">
-            <div className="vx-set-card-text">
-              <div className="vx-set-card-label">{t("settings.notify")}</div>
-              <div className="vx-set-card-sub">{t("settings.notifySub")}</div>
+          <div className="vx-set-field">
+            <div className="vx-set-card">
+              <div className="vx-set-row">
+                <div className="vx-set-card-text">
+                  <div className="vx-set-card-label">{t("settings.notify")}</div>
+                </div>
+                <Toggle
+                  on={config.notifyOnModeSwitch}
+                  onToggle={toggleNotify}
+                  labels={[t("settings.on"), t("settings.off")]}
+                  disabled={recording}
+                />
+              </div>
             </div>
-            <Toggle
-              on={config.notifyOnModeSwitch}
-              onToggle={toggleNotify}
-              labels={[t("settings.on"), t("settings.off")]}
-              disabled={recording}
-            />
+            <p className="vx-set-field-desc">{t("settings.notifySub")}</p>
           </div>
         </div>
       </section>
@@ -222,19 +228,21 @@ export function SettingsPanel({
 
       <section className="set-section" data-sec="system">
         <SectionHead id="system" />
-        <div className="vx-set-card">
-          <div className="vx-set-row">
-            <div className="vx-set-card-text">
-              <div className="vx-set-card-label">{t("settings.clipboard")}</div>
-              <div className="vx-set-card-sub">{t("settings.clipboardSub")}</div>
+        <div className="vx-set-field">
+          <div className="vx-set-card">
+            <div className="vx-set-row">
+              <div className="vx-set-card-text">
+                <div className="vx-set-card-label">{t("settings.clipboard")}</div>
+              </div>
+              <Toggle
+                on={config.copyToClipboard}
+                onToggle={() => set("copyToClipboard", !config.copyToClipboard)}
+                labels={[t("settings.on"), t("settings.off")]}
+                disabled={recording}
+              />
             </div>
-            <Toggle
-              on={config.copyToClipboard}
-              onToggle={() => set("copyToClipboard", !config.copyToClipboard)}
-              labels={[t("settings.on"), t("settings.off")]}
-              disabled={recording}
-            />
           </div>
+          <p className="vx-set-field-desc">{t("settings.clipboardSub")}</p>
         </div>
         <div className="vx-set-card vx-set-card--stack">
           <div className="vx-set-card-label">{t("settings.appLanguage")}</div>
@@ -250,35 +258,6 @@ export function SettingsPanel({
               </option>
             ))}
           </select>
-        </div>
-        <div className="vx-set-card vx-set-card--stack">
-          <div className="vx-set-card-text">
-            <div className="vx-set-card-label">{t("perm.title")}</div>
-            <div className="vx-set-card-sub">{t("perm.banner")}</div>
-          </div>
-          <div className="perm-cards">
-            <PermCard
-              name={t("perm.mic.name")}
-              desc={t("perm.mic.desc")}
-              granted={perms.microphone}
-              onAction={() => requestMicrophone().then(refreshPerms).catch(() => {})}
-              onOpen={() => openPermissionSettings("microphone").catch(() => {})}
-              disabled={recording}
-            />
-            <PermCard
-              name={t("perm.ax.name")}
-              desc={t("perm.ax.desc")}
-              granted={perms.accessibility}
-              onAction={() => requestAccessibility().then(refreshPerms).catch(() => {})}
-              onOpen={() => openPermissionSettings("accessibility").catch(() => {})}
-              disabled={recording}
-            />
-          </div>
-          <div className="vx-set-perm-actions">
-            <button type="button" className="vx-btn" onClick={refreshPerms} disabled={recording}>
-              ↻ {t("perm.recheck")}
-            </button>
-          </div>
         </div>
       </section>
 
@@ -353,22 +332,24 @@ function StorageSection({
         </div>
       </div>
 
-      <div className="vx-set-card">
-        <div className="vx-set-row">
-          <div className="vx-set-card-text">
-            <div className="vx-set-card-label">{t("settings.deleteBehavior")}</div>
-            <div className="vx-set-card-sub">{t("settings.deleteBehaviorSub")}</div>
+      <div className="vx-set-field">
+        <div className="vx-set-card">
+          <div className="vx-set-row">
+            <div className="vx-set-card-text">
+              <div className="vx-set-card-label">{t("settings.deleteBehavior")}</div>
+            </div>
+            <Segmented<DeleteBehavior>
+              value={deleteBehavior}
+              options={[
+                { value: "both", label: t("settings.deleteBoth") },
+                { value: "transcript", label: t("settings.deleteKeepAudio") },
+              ]}
+              onChange={onDeleteBehavior}
+              disabled={recording}
+            />
           </div>
-          <Segmented<DeleteBehavior>
-            value={deleteBehavior}
-            options={[
-              { value: "both", label: t("settings.deleteBoth") },
-              { value: "transcript", label: t("settings.deleteKeepAudio") },
-            ]}
-            onChange={onDeleteBehavior}
-            disabled={recording}
-          />
         </div>
+        <p className="vx-set-field-desc">{t("settings.deleteBehaviorSub")}</p>
       </div>
 
       <div className="vx-set-card vx-set-card--stack">
@@ -403,42 +384,3 @@ function StorageSection({
   );
 }
 
-function PermCard({
-  name,
-  desc,
-  granted,
-  onAction,
-  onOpen,
-  disabled = false,
-}: {
-  name: string;
-  desc: string;
-  granted: boolean;
-  onAction: () => void;
-  onOpen: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="perm-card">
-      <div className="pc-main">
-        <div className="pc-name">
-          {name}
-          <span className={"pc-status " + (granted ? "granted" : "denied")}>
-            {granted ? t("perm.granted") : t("perm.denied")}
-          </span>
-        </div>
-        <div className="pc-desc">{desc}</div>
-      </div>
-      <div className="vx-set-perm-btns">
-        <button type="button" className="vx-btn" onClick={onOpen} disabled={disabled}>
-          {t("perm.open")}
-        </button>
-        {granted ? null : (
-          <button type="button" className="vx-btn vx-btn--mag" onClick={onAction} disabled={disabled}>
-            {t("perm.grant")}
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}

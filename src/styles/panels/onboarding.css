@@ -11,6 +11,16 @@
   padding: 8px 10px 48px;
 }
 
+/* Full-window takeover: when onboarding is active the app shell (header / nav /
+   footer) is not rendered, so the .app grid collapses to a single flex cell that
+   the onboarding panel fills. Extra top padding gives the centered panel room. */
+.app.onb-full {
+  display: flex;
+}
+.app.onb-full .onb-root {
+  padding-top: clamp(24px, 7vh, 90px);
+}
+
 .onb-panel {
   position: relative;
   width: 100%;

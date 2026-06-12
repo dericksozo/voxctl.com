@@ -198,9 +198,11 @@ export default function App() {
     };
   }, [permsMissing, refreshPerms]);
 
-  function renderPanel() {
-    if (showOnboarding) {
-      return (
+  // Onboarding takes over the entire window — no nav / header / footer shell —
+  // until config + permissions + a validated key are all satisfied.
+  if (showOnboarding) {
+    return (
+      <div className={"app onb-full" + (theme.scanlines ? " scan" : "") + (theme.grid ? " gridbg" : "")}>
         <OnboardingPanel
           registry={registry}
           providers={providers}
@@ -212,8 +214,12 @@ export default function App() {
           refreshHistory={refreshHistory}
           refreshPerms={refreshPerms}
         />
-      );
-    }
+        {import.meta.env.DEV ? <TweaksPanel theme={theme} onChange={setTheme} /> : null}
+      </div>
+    );
+  }
+
+  function renderPanel() {
     switch (view) {
       case "home":
         return (
@@ -251,8 +257,6 @@ export default function App() {
             registry={registry}
             providers={providers}
             refreshProviders={refreshProviders}
-            perms={perms}
-            refreshPerms={refreshPerms}
             recording={recording}
             onSection={setHeaderSection}
           />
@@ -262,13 +266,9 @@ export default function App() {
     }
   }
 
-  const baseLabel = showOnboarding ? t("onboarding.title") : (MENU.find((m) => m.id === view)?.label ?? "");
-  const sectionActive = showOnboarding ? null : headerSection;
-  const descText = showOnboarding
-    ? t("onboarding.desc")
-    : sectionActive?.desc
-      ? sectionActive.desc
-      : (DESC[view] ?? "");
+  const baseLabel = MENU.find((m) => m.id === view)?.label ?? "";
+  const sectionActive = headerSection;
+  const descText = sectionActive?.desc ? sectionActive.desc : (DESC[view] ?? "");
   const frameCls = "content-frame " + (phase === "closing" ? "closing" : phase === "opening" ? "opening" : "");
 
   return (
@@ -312,7 +312,7 @@ export default function App() {
                 <li key={m.id}>
                   <button
                     type="button"
-                    className={"nav-item" + (!showOnboarding && m.id === view ? " active" : "")}
+                    className={"nav-item" + (m.id === view ? " active" : "")}
                     onClick={() => switchTo(m.id)}
                   >
                     <span className="cursor">↵</span>
@@ -365,7 +365,7 @@ export default function App() {
               <>
                 {"// "}
                 <Typewriter
-                  key={"base:" + (showOnboarding ? "onb" : view)}
+                  key={"base:" + view}
                   text={baseLabel}
                   run={phase !== "closing"}
                   speed={11}
