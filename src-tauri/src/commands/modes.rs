@@ -553,6 +553,15 @@ pub fn refresh_active_mode(app: &AppHandle) {
     recompute_and_emit(app);
 }
 
+/// Whether any enabled mode auto-matches on a website. When none do, the focused
+/// URL can never change the resolved mode, so the focused_url() AX-tree walk can
+/// be skipped on the hot paths (perf §1.1/§3.1).
+fn any_enabled_website_trigger(modes: &[Mode]) -> bool {
+    modes
+        .iter()
+        .any(|m| m.enabled && !m.trigger_websites.is_empty())
+}
+
 /// Build the recording context (language + model + capability options + which
 /// app/website/mode it belongs to) from the resolved active mode. Language
 /// precedence: HUD override → active mode language → config default → auto.
@@ -563,7 +572,14 @@ pub fn resolve_context(app: &AppHandle, override_lang: Option<String>) -> Record
     // At record time VOXCTL is not frontmost (hotkey pressed from the target
     // app), so the frontmost app is the real auto-match target.
     let app_name = macos::frontmost_app().map(|(n, _)| n);
-    let host = macos::focused_url().as_deref().and_then(macos::host_of);
+    // Only walk the AX tree for the focused URL when a website trigger could
+    // actually use it; otherwise the URL can't change the match, so skip the
+    // expensive probe on the press→record hot path (perf §1.1).
+    let host = if any_enabled_website_trigger(&modes) {
+        macos::focused_url().as_deref().and_then(macos::host_of)
+    } else {
+        None
+    };
     let resolved = resolve_active_mode(
         &modes,
         pinned.as_deref(),
