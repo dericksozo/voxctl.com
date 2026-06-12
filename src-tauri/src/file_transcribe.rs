@@ -203,13 +203,15 @@ fn parse_segment_speakers(v: &Value) -> Vec<SpeakerSeg> {
 
 /// Build speaker segments by merging runs of consecutive same-speaker words — the
 /// fallback when a provider gives per-word speakers but no segment list.
-fn group_words_to_speakers(words: &[WordStamp]) -> Vec<SpeakerSeg> {
+pub(crate) fn group_words_to_speakers(words: &[WordStamp]) -> Vec<SpeakerSeg> {
     let mut out: Vec<SpeakerSeg> = Vec::new();
     for w in words {
         let Some(spk) = &w.speaker else { continue };
         match out.last_mut() {
             Some(last) if &last.speaker == spk => {
-                last.text.push(' ');
+                if should_insert_space_between_tokens(&last.text, &w.word) {
+                    last.text.push(' ');
+                }
                 last.text.push_str(&w.word);
                 last.end = w.end;
             }
@@ -222,6 +224,64 @@ fn group_words_to_speakers(words: &[WordStamp]) -> Vec<SpeakerSeg> {
         }
     }
     out
+}
+
+fn should_insert_space_between_tokens(current: &str, next: &str) -> bool {
+    let Some(prev) = current.trim_end().chars().next_back() else {
+        return false;
+    };
+    let Some(next) = next.trim_start().chars().next() else {
+        return false;
+    };
+    if is_unspaced_script(prev) && is_unspaced_script(next) {
+        return false;
+    }
+    if is_no_space_before(next) || is_no_space_after(prev) {
+        return false;
+    }
+    true
+}
+
+fn is_unspaced_script(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x3040..=0x309f // Hiragana
+            | 0x30a0..=0x30ff // Katakana
+            | 0x3400..=0x4dbf // CJK Extension A
+            | 0x4e00..=0x9fff // CJK Unified Ideographs
+            | 0xac00..=0xd7af // Hangul syllables
+    )
+}
+
+fn is_no_space_before(c: char) -> bool {
+    matches!(
+        c,
+        '.' | ','
+            | '!'
+            | '?'
+            | ':'
+            | ';'
+            | ')'
+            | ']'
+            | '}'
+            | '、'
+            | '。'
+            | '，'
+            | '．'
+            | '！'
+            | '？'
+            | '：'
+            | '；'
+            | '）'
+            | '］'
+            | '｝'
+            | '」'
+            | '』'
+    )
+}
+
+fn is_no_space_after(c: char) -> bool {
+    matches!(c, '(' | '[' | '{' | '（' | '［' | '｛' | '「' | '『')
 }
 
 /// Words + speakers from a provider response: segment speakers when present, else
@@ -618,6 +678,25 @@ mod tests {
         assert_eq!(speakers[0].speaker, "A");
         assert_eq!(speakers[0].text, "one two");
         assert_eq!(speakers[1].text, "three");
+    }
+
+    #[test]
+    fn speakers_group_japanese_without_artificial_spaces() {
+        let v = json!({
+            "words": [
+                { "word": "じ", "start": 0.0, "end": 0.1, "speaker": "0" },
+                { "word": "ゃ", "start": 0.1, "end": 0.2, "speaker": "0" },
+                { "word": "あ", "start": 0.2, "end": 0.3, "speaker": "0" },
+                { "word": "今", "start": 0.3, "end": 0.4, "speaker": "0" },
+                { "word": "日", "start": 0.4, "end": 0.5, "speaker": "0" },
+                { "word": "本", "start": 0.5, "end": 0.6, "speaker": "0" },
+                { "word": "語", "start": 0.6, "end": 0.7, "speaker": "0" },
+                { "word": "hello", "start": 1.0, "end": 1.2, "speaker": "0" }
+            ]
+        });
+        let (_, speakers) = parse_structured(&v);
+        assert_eq!(speakers.len(), 1);
+        assert_eq!(speakers[0].text, "じゃあ今日本語 hello");
     }
 
     #[test]
