@@ -403,6 +403,10 @@ pub fn list_by_status(db: &HistoryDb, status: &str) -> Vec<HistoryItem> {
 }
 
 pub fn list(db: &HistoryDb) -> Vec<HistoryItem> {
+    // perf instrumentation (§6 measuring before/after): DB scan + extra_json
+    // parse cost grows with the archive — log duration + row count so the
+    // pagination work (perf/06) is provable. Cheap; gated behind `debug`.
+    let t0 = std::time::Instant::now();
     let conn = db.0.lock().unwrap();
     let sql = format!("SELECT {SELECT_COLS} FROM recordings ORDER BY created_at DESC");
     let mut stmt = match conn.prepare(&sql) {
@@ -413,13 +417,19 @@ pub fn list(db: &HistoryDb) -> Vec<HistoryItem> {
         }
     };
     let rows = stmt.query_map([], row_to_item);
-    match rows {
+    let items: Vec<HistoryItem> = match rows {
         Ok(iter) => iter.filter_map(Result::ok).collect(),
         Err(e) => {
             log::error!("list query: {e}");
             Vec::new()
         }
-    }
+    };
+    log::debug!(
+        "perf: list_history {} rows in {} ms",
+        items.len(),
+        t0.elapsed().as_millis()
+    );
+    items
 }
 
 pub fn get(db: &HistoryDb, id: i64) -> Option<HistoryItem> {

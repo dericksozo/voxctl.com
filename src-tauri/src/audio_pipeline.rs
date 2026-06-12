@@ -58,7 +58,12 @@ pub fn on_recording_finished(
             },
         };
 
-        finalize(&app, id, &ctx, result, started.elapsed().as_millis() as i64);
+        // perf instrumentation (§6 measuring before/after): stop → transcript
+        // ready. Mirrors the persisted `transcription_ms` so the WAV-buffer /
+        // resample work (perf/09-11) shows up against a stable baseline.
+        let elapsed_ms = started.elapsed().as_millis() as i64;
+        log::debug!("perf: stop→transcript {elapsed_ms} ms (id {id})");
+        finalize(&app, id, &ctx, result, elapsed_ms);
     });
 }
 
