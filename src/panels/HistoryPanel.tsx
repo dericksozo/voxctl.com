@@ -1,5 +1,5 @@
 import "../styles/panels/home.css";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { t } from "../i18n";
@@ -544,48 +544,66 @@ export function HistoryPanel({
   const fileModes = modes.filter((m) => modelById(registry, m.model)?.canFile);
   const modeLabel = (m: Mode) => `${m.name} · ${modelById(registry, m.model)?.label ?? m.model}`;
 
-  const q = query.trim().toLowerCase();
-  const filtered = items.filter((h) => {
-    if (q) {
-      const hay = `${h.transcript} ${h.appName ?? ""} ${h.website ?? ""} ${h.modeName}`.toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
-    return true;
-  });
+  // Precompute a lowercased search haystack + day label per item, once per history
+  // change — not per render and not per keystroke (§5.2/§5.3).
+  const searchIndex = useMemo(
+    () =>
+      items.map((h) => ({
+        item: h,
+        hay: `${h.transcript} ${h.appName ?? ""} ${h.website ?? ""} ${h.modeName}`.toLowerCase(),
+        day: dayLabel(h.createdAt),
+      })),
+    [items],
+  );
 
-  // ---- derived stats (top model / spend / minutes) ----
-  let totalSecs = 0;
-  let totalCost = 0;
-  const modelCounts = new Map<string, number>();
-  for (const h of items) {
-    totalSecs += h.durationSecs || 0;
-    totalCost += estimateCost(modelById(registry, h.modelId), h.durationSecs);
-    if (h.modelId) modelCounts.set(h.modelId, (modelCounts.get(h.modelId) ?? 0) + 1);
-  }
-  let topModelId: string | null = null;
-  let topCount = 0;
-  for (const [id, c] of modelCounts) {
-    if (c > topCount) {
-      topCount = c;
-      topModelId = id;
-    }
-  }
-  const topModel = topModelId ? modelById(registry, topModelId) : undefined;
-  const topModelLabel = topModel?.label ?? topModelId ?? "";
-  const totalMinutes = Math.round(totalSecs / 60);
-  const totalHours = (totalSecs / 3600).toFixed(1);
-  const spendLabel = totalCost > 0 ? formatCost(totalCost) : "$0.00";
+  // Defer the query so typing stays responsive while the (potentially large) list
+  // filters against the precomputed haystacks (§5.2).
+  const deferredQuery = useDeferredValue(query);
+  const q = deferredQuery.trim().toLowerCase();
+  const filtered = useMemo(
+    () => (q ? searchIndex.filter((e) => e.hay.includes(q)) : searchIndex),
+    [searchIndex, q],
+  );
 
-  // Window the filtered list, then group the visible slice by day.
-  const shown = filtered.slice(0, visibleCount);
-  const hasMore = visibleCount < filtered.length;
-  const groups: { day: string; items: HistoryItem[] }[] = [];
-  for (const item of shown) {
-    const day = dayLabel(item.createdAt);
-    const g = groups.find((x) => x.day === day);
-    if (g) g.items.push(item);
-    else groups.push({ day, items: [item] });
-  }
+  // ---- derived stats (top model / spend / minutes), memoized over all items ----
+  const stats = useMemo(() => {
+    let totalSecs = 0;
+    let totalCost = 0;
+    const modelCounts = new Map<string, number>();
+    for (const h of items) {
+      totalSecs += h.durationSecs || 0;
+      totalCost += estimateCost(modelById(registry, h.modelId), h.durationSecs);
+      if (h.modelId) modelCounts.set(h.modelId, (modelCounts.get(h.modelId) ?? 0) + 1);
+    }
+    let topModelId: string | null = null;
+    let topCount = 0;
+    for (const [id, c] of modelCounts) {
+      if (c > topCount) {
+        topCount = c;
+        topModelId = id;
+      }
+    }
+    return { totalSecs, totalCost, topModelId };
+  }, [items, registry]);
+  const topModel = stats.topModelId ? modelById(registry, stats.topModelId) : undefined;
+  const topModelLabel = topModel?.label ?? stats.topModelId ?? "";
+  const totalMinutes = Math.round(stats.totalSecs / 60);
+  const totalHours = (stats.totalSecs / 3600).toFixed(1);
+  const spendLabel = stats.totalCost > 0 ? formatCost(stats.totalCost) : "$0.00";
+
+  // Window the filtered list, then group the visible slice by day — memoized so it
+  // only recomputes when the filter result or the window size changes, with the day
+  // labels already computed in searchIndex (no per-render Date building, §5.3).
+  const { groups, hasMore } = useMemo(() => {
+    const shown = filtered.slice(0, visibleCount);
+    const gs: { day: string; items: HistoryItem[] }[] = [];
+    for (const e of shown) {
+      const g = gs.find((x) => x.day === e.day);
+      if (g) g.items.push(e.item);
+      else gs.push({ day: e.day, items: [e.item] });
+    }
+    return { groups: gs, hasMore: visibleCount < filtered.length };
+  }, [filtered, visibleCount]);
   // Re-run the scroll-spy when the set of day groups changes (load/search/grow).
   const dayKey = groups.map((g) => g.day).join("|");
 
