@@ -433,14 +433,19 @@ pub fn resolve_active_mode(
 }
 
 /// Frontmost app/website for auto-matching. None while pinned (irrelevant) or
-/// while VOXCTL itself is frontmost (keep the current mode).
-fn current_match_context(pinned: bool) -> (Option<String>, Option<String>) {
+/// while VOXCTL itself is frontmost (keep the current mode). `want_url` gates the
+/// expensive focused_url() walk to when a website trigger could actually use it.
+fn current_match_context(pinned: bool, want_url: bool) -> (Option<String>, Option<String>) {
     if pinned {
         return (None, None);
     }
     match macos::frontmost_app() {
         Some((name, bundle)) if bundle.as_deref() != Some(SELF_BUNDLE) => {
-            let host = macos::focused_url().as_deref().and_then(macos::host_of);
+            let host = if want_url {
+                macos::focused_url().as_deref().and_then(macos::host_of)
+            } else {
+                None
+            };
             (Some(name), host)
         }
         _ => (None, None),
@@ -490,7 +495,8 @@ pub fn recompute_and_emit(app: &AppHandle) {
     let modes = load(app);
     let pinned = read_store_string(app, PINNED_KEY);
     let default = read_store_string(app, DEFAULT_KEY);
-    let (app_name, host) = current_match_context(pinned.is_some());
+    let (app_name, host) =
+        current_match_context(pinned.is_some(), any_enabled_website_trigger(&modes));
     let resolved = resolve_active_mode(
         &modes,
         pinned.as_deref(),
@@ -551,6 +557,31 @@ pub fn refresh_active_mode(app: &AppHandle) {
         }
     }
     recompute_and_emit(app);
+}
+
+/// Debounced, off-main-thread driver for app-switch recomputes. The NSWorkspace
+/// activation notification fires on the main thread; running the store reads +
+/// AX walk there blocked VOXCTL's event loop on every Cmd-Tab system-wide (perf
+/// §3.1). The returned callback just enqueues a tick (cheap, main-thread-safe);
+/// a worker thread coalesces a burst of switches and runs only the last one off
+/// the main thread, re-reading the frontmost app once things settle.
+pub fn spawn_app_switch_debouncer(app: AppHandle) -> impl Fn() + Send + Sync + 'static {
+    // SyncSender (unlike Sender) is Sync, so the callback satisfies
+    // observe_app_switches' Fn + Send + Sync bound. Buffer of 1 + try_send drops
+    // extra ticks in a burst — we only need to know "something changed".
+    let (tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
+    std::thread::spawn(move || {
+        const DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(150);
+        while rx.recv().is_ok() {
+            // Keep resetting the window while switches keep arriving; settle on a
+            // quiet gap, then recompute once.
+            while rx.recv_timeout(DEBOUNCE).is_ok() {}
+            refresh_active_mode(&app);
+        }
+    });
+    move || {
+        let _ = tx.try_send(());
+    }
 }
 
 /// Whether any enabled mode auto-matches on a website. When none do, the focused
