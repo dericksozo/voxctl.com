@@ -223,16 +223,33 @@ fn load(app: &AppHandle) -> Vec<Mode> {
     let valid = valid_model_ids(app);
     if let Ok(store) = app.store(STORE_FILE) {
         if let Some(v) = store.get(KEY) {
-            if let Ok(modes) = serde_json::from_value::<Vec<Mode>>(v) {
-                let modes = dedupe_by_id(
-                    modes
-                        .into_iter()
-                        .map(|m| normalize_mode(m, &valid))
-                        .collect(),
-                );
-                if let Ok(v) = serde_json::to_value(&modes) {
-                    store.set(KEY, v);
-                    let _ = store.save();
+            if let Ok(parsed) = serde_json::from_value::<Vec<Mode>>(v) {
+                let before_len = parsed.len();
+                // normalize_mode only ever rewrites `mode.model`; track whether any
+                // mode's model actually changed, plus whether dedupe dropped a row.
+                let mut changed = false;
+                let normalized: Vec<Mode> = parsed
+                    .into_iter()
+                    .map(|m| {
+                        let before = m.model.clone();
+                        let nm = normalize_mode(m, &valid);
+                        changed |= nm.model != before;
+                        nm
+                    })
+                    .collect();
+                let modes = dedupe_by_id(normalized);
+                changed |= modes.len() != before_len;
+                // load() runs on every record start, every modes IPC call, and —
+                // via recompute_and_emit — on every system-wide app switch. Only
+                // persist when normalization actually changed something; otherwise
+                // this was a serialize + file write + fsync for a pure read
+                // (perf §1.2). After the one-time repair following a registry
+                // change, this branch becomes a no-op.
+                if changed {
+                    if let Ok(v) = serde_json::to_value(&modes) {
+                        store.set(KEY, v);
+                        let _ = store.save();
+                    }
                 }
                 ensure_default_valid(app, &modes);
                 return modes;
