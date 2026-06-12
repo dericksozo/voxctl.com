@@ -8,8 +8,12 @@ use crate::events;
 use crate::history::{self, HistoryDb, HistoryItem, StorageStats};
 
 #[tauri::command]
-pub fn list_history(app: AppHandle) -> Vec<HistoryItem> {
-    history::list(&app.state::<HistoryDb>())
+pub async fn list_history(app: AppHandle) -> Vec<HistoryItem> {
+    // Tauri v2 runs non-async commands on the main thread; a full archive read +
+    // serialize would freeze the UI event loop. Run it on the blocking pool (§4.2).
+    tauri::async_runtime::spawn_blocking(move || history::list(&app.state::<HistoryDb>()))
+        .await
+        .unwrap_or_default()
 }
 
 /// Word/speaker detail for one recording — the arrays list_history omits, fetched
@@ -91,12 +95,21 @@ pub fn increment_copy(app: AppHandle, id: i64) -> Result<i64, String> {
 
 /// Return the recording's WAV bytes for in-webview playback.
 #[tauri::command]
-pub fn read_audio(app: AppHandle, id: i64) -> Result<Vec<u8>, String> {
-    let item = history::get(&app.state::<HistoryDb>(), id).ok_or("recording not found")?;
-    match item.audio_status.as_str() {
-        "capturing" | "saving" => return Err("Audio is still being saved.".into()),
-        "failed" => return Err("Audio is unavailable for this recording.".into()),
-        _ => {}
+pub async fn read_audio(app: AppHandle, id: i64) -> Result<Vec<u8>, String> {
+    // A WAV can be hundreds of MB; reading it on the main thread would freeze the
+    // UI. Off-load the lookup + fs::read to the blocking pool (§4.2).
+    match tauri::async_runtime::spawn_blocking(move || {
+        let item = history::get(&app.state::<HistoryDb>(), id).ok_or("recording not found")?;
+        match item.audio_status.as_str() {
+            "capturing" | "saving" => return Err("Audio is still being saved.".into()),
+            "failed" => return Err("Audio is unavailable for this recording.".into()),
+            _ => {}
+        }
+        std::fs::read(&item.audio_path).map_err(|e| format!("read audio: {e}"))
+    })
+    .await
+    {
+        Ok(res) => res,
+        Err(e) => Err(format!("read_audio task: {e}")),
     }
-    std::fs::read(&item.audio_path).map_err(|e| format!("read audio: {e}"))
 }
