@@ -7,6 +7,8 @@
 //! remote copy fetched at runtime so models/pricing/capabilities can change
 //! without an app update. See `registry.json`.
 
+use std::sync::{Arc, OnceLock, RwLock};
+
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
@@ -134,10 +136,40 @@ fn cached(app: &AppHandle) -> Option<Registry> {
     serde_json::from_value(v).ok()
 }
 
+/// Process-wide memoized parse of the effective registry. Deserializing the
+/// bundled JSON (or the store cache) on every access is pure waste on the hot
+/// paths that read the registry — record start, resolve_context, valid_model_ids
+/// (i.e. every modes::load()), the pipeline, every retry iteration (perf §3.2).
+/// Parse once; callers get a cheap Arc clone. Invalidated when the store-backed
+/// override changes (see cache()/refresh_registry).
+static REGISTRY_CACHE: OnceLock<RwLock<Option<Arc<Registry>>>> = OnceLock::new();
+
+fn cache_cell() -> &'static RwLock<Option<Arc<Registry>>> {
+    REGISTRY_CACHE.get_or_init(|| RwLock::new(None))
+}
+
 /// The effective registry the rest of the app reads: a cached remote copy when
-/// available, otherwise the bundled fallback.
-pub fn effective(app: &AppHandle) -> Registry {
-    cached(app).unwrap_or_else(bundled)
+/// available, otherwise the bundled fallback. Parsed once and memoized.
+pub fn effective(app: &AppHandle) -> Arc<Registry> {
+    if let Some(reg) = cache_cell().read().unwrap().as_ref() {
+        return reg.clone();
+    }
+    let parsed = Arc::new(cached(app).unwrap_or_else(bundled));
+    let mut slot = cache_cell().write().unwrap();
+    // Lost the race? Prefer the copy another thread already memoized.
+    if let Some(reg) = slot.as_ref() {
+        return reg.clone();
+    }
+    *slot = Some(parsed.clone());
+    parsed
+}
+
+/// Drop the memoized registry so the next effective() re-parses (the store-backed
+/// remote override just changed).
+fn invalidate_cache() {
+    if let Some(cell) = REGISTRY_CACHE.get() {
+        *cell.write().unwrap() = None;
+    }
 }
 
 /// Persist a fetched registry as the cached override.
@@ -148,6 +180,7 @@ pub fn cache(app: &AppHandle, reg: &Registry) {
             let _ = store.save();
         }
     }
+    invalidate_cache();
 }
 
 /// Best-effort remote fetch. Any failure is returned to the caller, which keeps

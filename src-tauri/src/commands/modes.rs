@@ -129,8 +129,8 @@ pub fn default_modes() -> Vec<Mode> {
 fn valid_model_ids(app: &AppHandle) -> Vec<String> {
     registry::effective(app)
         .models
-        .into_iter()
-        .map(|m| m.id)
+        .iter()
+        .map(|m| m.id.clone())
         .collect()
 }
 
