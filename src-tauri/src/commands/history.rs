@@ -12,6 +12,13 @@ pub fn list_history(app: AppHandle) -> Vec<HistoryItem> {
     history::list(&app.state::<HistoryDb>())
 }
 
+/// Word/speaker detail for one recording — the arrays list_history omits, fetched
+/// on demand when a history card is expanded (perf §4.1).
+#[tauri::command]
+pub fn get_history_detail(app: AppHandle, id: i64) -> Option<history::HistoryDetail> {
+    history::detail(&app.state::<HistoryDb>(), id)
+}
+
 /// Whether a `×` delete should also remove the WAV (delete-behavior setting).
 fn delete_removes_audio(app: &AppHandle) -> bool {
     config::load_config(app).delete_behavior != "transcript"

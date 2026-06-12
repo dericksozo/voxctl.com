@@ -116,9 +116,20 @@ export interface HistoryItem {
   audioStatus: AudioStatus;
   /** Wall-clock from recording-stop to final transcript, in ms (0 if unknown). */
   transcriptionMs: number;
-  /** Per-word timing (empty unless the mode/model produced word timestamps). */
+  /** Per-word timing. Empty in list payloads — fetched via getHistoryDetail on
+   *  expand (gated by hasWordStamps). */
   wordStamps: WordStamp[];
-  /** Speaker-attributed segments (empty unless diarization produced them). */
+  /** Speaker-attributed segments. Empty in list payloads — see wordStamps. */
+  speakers: SpeakerSeg[];
+  /** Whether word-level timestamps exist (gates the STAMPS tab; array loads lazily). */
+  hasWordStamps: boolean;
+  /** Whether speaker info exists — segments or word-level labels (gates SPEAKERS tab). */
+  hasSpeakers: boolean;
+}
+
+/** Lazily-fetched structured detail for one recording (the arrays the list omits). */
+export interface HistoryDetail {
+  wordStamps: WordStamp[];
   speakers: SpeakerSeg[];
 }
 
