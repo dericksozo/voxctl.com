@@ -8,7 +8,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
@@ -106,6 +106,7 @@ fn downmix<T: Copy>(data: &[T], channels: usize, to_f32: impl Fn(T) -> f32) -> V
 fn start_capture(
     app: &AppHandle,
     raw_tx: Option<UnboundedSender<Vec<f32>>>,
+    t0: Instant,
 ) -> Result<Capture, String> {
     let host = cpal::default_host();
     let device = host
@@ -190,6 +191,7 @@ fn start_capture(
             log::error!("failed to start stream: {e}");
             return;
         }
+        log::debug!("perf: press→record {} ms", t0.elapsed().as_millis());
 
         // Emit the level ~16x/sec while recording. Sleeps, so no busy loop.
         while !stop_t.load(Ordering::Relaxed) {
@@ -223,6 +225,11 @@ fn finish_capture(mut cap: Capture) -> (Vec<f32>, u32) {
 }
 
 pub fn start(app: &AppHandle) -> Result<(), String> {
+    // perf instrumentation (§6 measuring before/after): the press → mic-open
+    // latency that clips first words. Logged when `stream.play()` succeeds on
+    // the capture thread, so it spans the synchronous pre-capture work the hot-
+    // path branches (perf/03/04/05) cut. Cheap; gated behind `debug`.
+    let t0 = Instant::now();
     let state = app.state::<RecorderState>();
     let override_lang = {
         let inner = state.0.lock().unwrap();
@@ -271,7 +278,7 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
     let capture_raw_tx = session_bits
         .as_ref()
         .map(|(_, raw_tx, _, _)| raw_tx.clone());
-    let cap = start_capture(app, capture_raw_tx)?;
+    let cap = start_capture(app, capture_raw_tx, t0)?;
     let input_rate = cap.sample_rate;
 
     let lang_label = ctx.language.clone().unwrap_or_else(|| "auto".into());
