@@ -234,6 +234,11 @@ mod tests {
         // realtime whisper is live-only.
         let r = reg.model_by_id("gpt-realtime-whisper").unwrap();
         assert!(r.can_live && !r.can_file);
+        // gpt-4o-transcribe-diarize is a file-only diarization model with no
+        // keyword steering (the diarize endpoint rejects `prompt`).
+        let d = reg.model_by_id("gpt-4o-transcribe-diarize").unwrap();
+        assert!(d.can_file && !d.can_live);
+        assert!(d.capabilities.diarization && !d.supports_keywords);
     }
 
     #[test]

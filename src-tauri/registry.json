@@ -73,6 +73,22 @@
       "capabilities": {}
     },
     {
+      "id": "gpt-4o-transcribe-diarize",
+      "provider": "openai",
+      "label": "GPT-4O-TRANSCRIBE-DIARIZE",
+      "canLive": false,
+      "canFile": true,
+      "costRate": 0.006,
+      "costUnit": "perMin",
+      "supportsLanguage": true,
+      "supportsKeywords": false,
+      "accuracy": "VERY HIGH",
+      "speed": "FAST",
+      "description": "OpenAI transcription with built-in speaker diarization — labels who said what in a multi-speaker recording.",
+      "useCase": "Multi-speaker files (interviews, meetings) where you want speaker labels.",
+      "capabilities": { "diarization": true }
+    },
+    {
       "id": "whisper-1",
       "provider": "openai",
       "label": "WHISPER-1",
@@ -91,7 +107,7 @@
     {
       "id": "grok-stt-live",
       "provider": "xai",
-      "label": "GROK STT (LIVE)",
+      "label": "Speech to Text (Live)",
       "canLive": true,
       "canFile": false,
       "costRate": 0.2,
@@ -111,7 +127,7 @@
     {
       "id": "grok-stt-file",
       "provider": "xai",
-      "label": "GROK STT (FILE)",
+      "label": "Speech to Text (File)",
       "canLive": false,
       "canFile": true,
       "costRate": 0.1,

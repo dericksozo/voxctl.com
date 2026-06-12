@@ -3,19 +3,12 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { ProviderLogo } from "./ProviderLogo";
 import { t } from "../i18n";
 import { deleteApiKey, setApiKey } from "../lib/ipc";
-import {
-  costLabel,
-  modelById,
-  type ProviderId,
-  type ProviderRecord,
-  type Registry,
-} from "../lib/registry";
+import type { ProviderId, ProviderRecord, Registry } from "../lib/registry";
 
 /** Provider key entry shared by Settings and onboarding. Validation/storage
  *  stays Rust-owned; the UI only shows the transient result. */
 export function ProviderKeyCard({
   provider,
-  registry,
   validated,
   recording,
   onChanged,
@@ -33,7 +26,6 @@ export function ProviderKeyCard({
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const defaultModel = modelById(registry, provider.defaultModelId);
 
   async function save() {
     if (recording) return;
@@ -77,11 +69,6 @@ export function ProviderKeyCard({
           </span>
           {provider.label}
         </span>
-        {defaultModel ? (
-          <span className="prov-model">
-            {defaultModel.label} <span className="dim">{costLabel(defaultModel)}</span>
-          </span>
-        ) : null}
         <button
           type="button"
           className="prov-docs"
