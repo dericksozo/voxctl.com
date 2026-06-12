@@ -154,6 +154,10 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     if !have.iter().any(|c| c == "extra_json") {
         conn.execute_batch("ALTER TABLE recordings ADD COLUMN extra_json TEXT")?;
     }
+    // Index `status` for the retry worker's poll and startup reconciliation
+    // (perf §3.3/§4.1). Created here (not in create_schema) so it runs only
+    // after the status column is guaranteed to exist on legacy databases.
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status)")?;
     Ok(())
 }
 
@@ -161,6 +165,12 @@ pub fn init(app: &AppHandle) -> Result<HistoryDb, String> {
     let dir = data_dir(app);
     std::fs::create_dir_all(&dir).map_err(|e| format!("create data dir: {e}"))?;
     let conn = Connection::open(dir.join("voxctl.db")).map_err(|e| format!("open db: {e}"))?;
+    // WAL + synchronous=NORMAL (perf §1.3/§4.1): commits stop fsync-ing the whole
+    // DB, so every small write — reserve_recording on the record-start hot path,
+    // status flips, copy counts — is dramatically cheaper, and reads proceed
+    // concurrently with writes on the single shared connection. Set once per open.
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+        .map_err(|e| format!("pragmas: {e}"))?;
     create_schema(&conn).map_err(|e| format!("schema: {e}"))?;
     migrate(&conn).map_err(|e| format!("migrate: {e}"))?;
     Ok(HistoryDb(Mutex::new(conn)))
@@ -313,6 +323,28 @@ pub fn update_result(
     let _ = conn.execute(
         "UPDATE recordings SET transcript = ?2, language = ?3, words = ?4, status = ?5, transcription_ms = ?6, extra_json = ?7 WHERE id = ?1",
         params![id, transcript, language, words, status, transcription_ms, extra_json],
+    );
+}
+
+/// Like `update_result` but also sets `model_id` in the same statement — used by
+/// re-run, where a recording is re-transcribed through a different mode's model.
+/// One UPDATE instead of the previous update_result + set_model_id pair (perf §4.1).
+#[allow(clippy::too_many_arguments)]
+pub fn update_result_and_model(
+    db: &HistoryDb,
+    id: i64,
+    transcript: &str,
+    language: &str,
+    status: &str,
+    transcription_ms: i64,
+    extra_json: Option<&str>,
+    model_id: &str,
+) {
+    let conn = db.0.lock().unwrap();
+    let words = transcript.split_whitespace().count() as i64;
+    let _ = conn.execute(
+        "UPDATE recordings SET transcript = ?2, language = ?3, words = ?4, status = ?5, transcription_ms = ?6, extra_json = ?7, model_id = ?8 WHERE id = ?1",
+        params![id, transcript, language, words, status, transcription_ms, extra_json, model_id],
     );
 }
 
@@ -481,30 +513,31 @@ pub fn increment_copy(db: &HistoryDb, id: i64) -> i64 {
     .unwrap_or(0)
 }
 
-/// Set the model id (after a re-run through a different mode).
-pub fn set_model_id(db: &HistoryDb, id: i64, model_id: &str) {
-    let conn = db.0.lock().unwrap();
-    let _ = conn.execute(
-        "UPDATE recordings SET model_id = ?2 WHERE id = ?1",
-        params![id, model_id],
-    );
-}
-
 /// Delete multiple rows; returns each removed row's audio path so the caller can
 /// decide whether to also remove the file (per the delete-behavior setting).
 pub fn delete_many(db: &HistoryDb, ids: &[i64]) -> Vec<String> {
-    let conn = db.0.lock().unwrap();
+    let mut conn = db.0.lock().unwrap();
     let mut paths = Vec::new();
+    // One transaction instead of N implicit ones — a single commit for the whole
+    // batch rather than a fsync per row (perf §4.1).
+    let tx = match conn.transaction() {
+        Ok(t) => t,
+        Err(e) => {
+            log::error!("delete_many transaction: {e}");
+            return paths;
+        }
+    };
     for &id in ids {
-        if let Ok(p) = conn.query_row(
+        if let Ok(p) = tx.query_row(
             "SELECT audio_path FROM recordings WHERE id = ?1",
             params![id],
             |r| r.get::<_, String>(0),
         ) {
             paths.push(p);
         }
-        let _ = conn.execute("DELETE FROM recordings WHERE id = ?1", params![id]);
+        let _ = tx.execute("DELETE FROM recordings WHERE id = ?1", params![id]);
     }
+    let _ = tx.commit();
     paths
 }
 
