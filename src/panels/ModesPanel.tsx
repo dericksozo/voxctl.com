@@ -86,7 +86,9 @@ export function ModesPanel({
   // History stores the mode *name* (not id), so match by name for the
   // transcribing window; that's sufficient for a UI lock.
   const transcribingNames = new Set(
-    (history ?? []).filter((h) => h.status === "transcribing").map((h) => h.modeName),
+    (history ?? [])
+      .filter((h) => h.status === "recording" || h.status === "transcribing")
+      .map((h) => h.modeName),
   );
   const isInUse = (m: Mode) =>
     (recording && m.id === activeModeId) || transcribingNames.has(m.name);

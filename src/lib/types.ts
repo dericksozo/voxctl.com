@@ -85,7 +85,13 @@ export interface SpeakerSeg {
 }
 
 /** Lifecycle of a recording's transcription. */
-export type RecordingStatus = "transcribing" | "done" | "failed" | "needs_transcription";
+export type RecordingStatus =
+  | "recording"
+  | "transcribing"
+  | "done"
+  | "failed"
+  | "needs_transcription";
+export type AudioStatus = "capturing" | "saving" | "ready" | "failed";
 
 export interface HistoryItem {
   id: number;
@@ -107,6 +113,7 @@ export interface HistoryItem {
   modelId: string;
   /** Size of the saved WAV on disk, in bytes (0 if the file is gone). */
   audioBytes: number;
+  audioStatus: AudioStatus;
   /** Wall-clock from recording-stop to final transcript, in ms (0 if unknown). */
   transcriptionMs: number;
   /** Per-word timing (empty unless the mode/model produced word timestamps). */
