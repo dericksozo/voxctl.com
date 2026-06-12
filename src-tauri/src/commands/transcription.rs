@@ -75,7 +75,7 @@ pub async fn retranscribe(app: AppHandle, id: i64, mode_id: String) -> Result<Re
     };
 
     let resolved = crate::lang_detect::resolve(lang.as_deref(), &out.text);
-    history::update_result(
+    history::update_result_and_model(
         &app.state::<HistoryDb>(),
         id,
         &out.text,
@@ -83,8 +83,8 @@ pub async fn retranscribe(app: AppHandle, id: i64, mode_id: String) -> Result<Re
         "done",
         started.elapsed().as_millis() as i64,
         out.extra_json().as_deref(),
+        &mode.model,
     );
-    history::set_model_id(&app.state::<HistoryDb>(), id, &mode.model);
     let _ = app.emit(events::HISTORY_CHANGED, ());
 
     let diarization_dropped =
