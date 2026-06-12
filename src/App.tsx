@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./styles/theme.css";
 import { Frame, Logo, Qr } from "./components/Primitives";
 import { Clock } from "./components/Clock";
@@ -33,6 +33,15 @@ import {
 } from "./lib/registry";
 
 const pad = (n: number) => String(n).padStart(2, "0");
+
+// Memoize the panels + ModeSwitcher so unrelated App state changes (toast,
+// recording, header section, clock) don't re-render them. Their props are stable
+// — state refs plus useCallback'd handlers — so memo actually sticks (§5.1).
+const MHistoryPanel = memo(HistoryPanel);
+const MHomePanel = memo(HomePanel);
+const MModesPanel = memo(ModesPanel);
+const MSettingsPanel = memo(SettingsPanel);
+const MModeSwitcher = memo(ModeSwitcher);
 
 // Nav order: 01 HOME (transcript log), 02 MODES, 03 STATS (usage dashboard),
 // 04 SETTINGS. Note "home" now renders the transcript log and "stats" renders
@@ -134,14 +143,17 @@ export default function App() {
     document.documentElement.style.setProperty("--head", `"${theme.headerFont}", sans-serif`);
   }, [theme]);
 
-  const minutes = Math.round(history.reduce((s, h) => s + h.durationSecs, 0) / 60);
-
-  const META: Record<string, string> = {
-    home: `${history.length} RECORDINGS · ${minutes} MIN`,
-    modes: `${modes.length} MODES · CONTEXT-AWARE PRESETS`,
-    stats: t("nav.stats.meta"),
-    settings: t("nav.settings.meta"),
-  };
+  // Memoized so the per-render reduce over all history only re-runs when history
+  // (or the modes count) actually changes (§5.1).
+  const META = useMemo<Record<string, string>>(() => {
+    const minutes = Math.round(history.reduce((s, h) => s + h.durationSecs, 0) / 60);
+    return {
+      home: `${history.length} RECORDINGS · ${minutes} MIN`,
+      modes: `${modes.length} MODES · CONTEXT-AWARE PRESETS`,
+      stats: t("nav.stats.meta"),
+      settings: t("nav.settings.meta"),
+    };
+  }, [history, modes]);
   const DESC: Record<string, string> = {
     home: t("nav.home.desc"),
     modes: t("nav.modes.desc"),
@@ -237,7 +249,7 @@ export default function App() {
     switch (view) {
       case "home":
         return (
-          <HistoryPanel
+          <MHistoryPanel
             history={history}
             modes={modes}
             registry={registry}
@@ -250,10 +262,10 @@ export default function App() {
           />
         );
       case "stats":
-        return <HomePanel history={history} registry={registry} go={switchTo} />;
+        return <MHomePanel history={history} registry={registry} go={switchTo} />;
       case "modes":
         return (
-          <ModesPanel
+          <MModesPanel
             modes={modes}
             activeModeId={activeMode?.mode.id ?? null}
             defaultModeId={defaultModeId}
@@ -267,7 +279,7 @@ export default function App() {
         );
       case "settings":
         return (
-          <SettingsPanel
+          <MSettingsPanel
             registry={registry}
             providers={providers}
             refreshProviders={refreshProviders}
@@ -300,7 +312,7 @@ export default function App() {
               {t("perm.title")}
             </button>
           ) : (
-            <ModeSwitcher
+            <MModeSwitcher
               modes={modes}
               active={activeMode}
               registry={registry}
