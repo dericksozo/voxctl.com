@@ -88,9 +88,19 @@ async fn archive_audio_now(
     samples: Vec<f32>,
     rate: u32,
 ) -> Result<Vec<u8>, String> {
-    let pcm16 = resample::resample_to_pcm16_24k(&samples, rate);
-    let wav = history::encode_wav(&pcm16, resample::TARGET_RATE)?;
-    std::fs::write(path, &wav).map_err(|e| format!("write wav: {e}"))?;
+    // Resample (a multi-second sinc pass), WAV encode, and the file write are all
+    // blocking/CPU-bound — run them on the blocking pool so they don't occupy a
+    // tokio worker on the async runtime (§2.3).
+    let target = resample::TARGET_RATE;
+    let path_owned = path.to_string();
+    let wav = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let pcm16 = resample::resample_to_pcm16_24k(&samples, rate);
+        let wav = history::encode_wav(&pcm16, target)?;
+        std::fs::write(&path_owned, &wav).map_err(|e| format!("write wav: {e}"))?;
+        Ok(wav)
+    })
+    .await
+    .map_err(|e| format!("archive task: {e}"))??;
     let db = app.state::<HistoryDb>();
     if !history::update_audio_result(&db, id, wav.len() as i64, "ready") {
         // The row was deleted while we were archiving — drop the orphan file and

@@ -202,8 +202,15 @@ pub fn encode_wav(pcm16: &[i16], rate: u32) -> Result<Vec<u8>, String> {
     {
         let mut w =
             hound::WavWriter::new(&mut cursor, spec).map_err(|e| format!("wav create: {e}"))?;
-        for &s in pcm16 {
-            w.write_sample(s).map_err(|e| format!("wav write: {e}"))?;
+        {
+            // hound's bulk i16 fast path: pack all samples in one pass instead of a
+            // bounds-checked write_sample() call per sample (§2.3). Byte-identical
+            // output (covered by wav_roundtrip), just several× faster on long files.
+            let mut sw = w.get_i16_writer(pcm16.len() as u32);
+            for &s in pcm16 {
+                sw.write_sample(s);
+            }
+            sw.flush().map_err(|e| format!("wav write: {e}"))?;
         }
         w.finalize().map_err(|e| format!("wav finalize: {e}"))?;
     }
