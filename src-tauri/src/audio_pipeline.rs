@@ -227,6 +227,11 @@ fn handle_failure(app: &AppHandle, id: i64, ctx: &RecordingContext, err: &str) {
         "failed"
     };
     history::set_status(&db, id, status);
+    if status == "failed" {
+        // Wake the retry worker so a freshly-failed row is retried promptly
+        // rather than after up to one poll interval (§3.3).
+        app.state::<crate::retry::RetryState>().1.notify_one();
+    }
 
     let msg = if no_key {
         "No API key for this mode's provider. Add one in Settings, then re-run from History."
