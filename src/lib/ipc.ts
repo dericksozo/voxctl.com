@@ -81,8 +81,6 @@ export type RerunResult = {
 /** Re-run a saved recording through a chosen (file-capable) mode. */
 export const retranscribe = (id: number, modeId: string) =>
   invoke<RerunResult>("retranscribe", { id, modeId });
-/** Returns the recording's WAV bytes for in-webview playback. */
-export const readAudio = (id: number) => invoke<number[]>("read_audio", { id });
 
 // --- Storage ---
 export const storageStats = () => invoke<StorageStats>("storage_stats");

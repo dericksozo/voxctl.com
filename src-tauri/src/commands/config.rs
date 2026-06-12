@@ -2,6 +2,9 @@
 //! OpenAI API key, which is kept ONLY in the macOS Keychain — never in plaintext
 //! config and never handed to the webview.
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
@@ -95,6 +98,22 @@ fn account(provider: &str) -> Result<String, String> {
 
 fn entry(provider: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYRING_SERVICE, &account(provider)?).map_err(|e| e.to_string())
+}
+
+/// In-memory cache of provider keys so record-start (and every transcribe) never
+/// hits the Keychain on the hot path (§1.4). Maps provider → Some(key) when
+/// present / None when known-absent. Invalidated on every set/clear so it can
+/// never serve a stale or removed key.
+static KEY_CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
+
+fn key_cache() -> &'static Mutex<HashMap<String, Option<String>>> {
+    KEY_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn invalidate_key_cache(provider: &str) {
+    if let Ok(mut m) = key_cache().lock() {
+        m.remove(provider);
+    }
 }
 
 /// True when a (previously validated) key is stored for the provider. Because we
@@ -205,6 +224,7 @@ fn clear_key(provider: &str) {
             Err(e) => log::warn!("failed clearing {provider} key: {e}"),
         }
     }
+    invalidate_key_cache(provider);
 }
 
 /// Validate the key against its provider, then store it in the Keychain ONLY if
@@ -228,7 +248,9 @@ pub async fn set_api_key(provider: String, key: String) -> Result<(), String> {
     }
     entry(&provider)?
         .set_password(&key)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    invalidate_key_cache(&provider);
+    Ok(())
 }
 
 #[tauri::command]
@@ -238,9 +260,19 @@ pub fn delete_api_key(provider: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Internal accessor for the transcription layer. Stays in Rust.
+/// Internal accessor for the transcription layer. Stays in Rust. Serves from the
+/// in-memory cache when warm so record-start avoids the Keychain syscall (§1.4).
 pub fn get_api_key(provider: &str) -> Option<String> {
-    entry(provider).ok().and_then(|e| e.get_password().ok())
+    if let Ok(m) = key_cache().lock() {
+        if let Some(cached) = m.get(provider) {
+            return cached.clone();
+        }
+    }
+    let key = entry(provider).ok().and_then(|e| e.get_password().ok());
+    if let Ok(mut m) = key_cache().lock() {
+        m.insert(provider.to_string(), key.clone());
+    }
+    key
 }
 
 /// One-time migration of the pre-multi-provider OpenAI key (keychain user
