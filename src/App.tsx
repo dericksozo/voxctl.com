@@ -67,6 +67,7 @@ export default function App() {
   const [headerSection, setHeaderSection] = useState<{ label: string; desc: string } | null>(null);
   const timers = useRef<number[]>([]);
   const toastTimer = useRef<number | undefined>(undefined);
+  const historyDebounce = useRef<number | undefined>(undefined);
 
   const refreshModes = useCallback(() => {
     listModes().then(setModes).catch(() => {});
@@ -76,6 +77,13 @@ export default function App() {
   const refreshHistory = useCallback(() => {
     listHistory().then(setHistory).catch(() => {});
   }, []);
+  // Coalesce HISTORY_CHANGED bursts into a single refetch: one dictation emits ≥4
+  // (reserve → stop → audio archived → transcript final), and each refetch is a
+  // full archive read + re-render, so debouncing collapses the burst (perf §4.1).
+  const debouncedRefreshHistory = useCallback(() => {
+    window.clearTimeout(historyDebounce.current);
+    historyDebounce.current = window.setTimeout(refreshHistory, 120);
+  }, [refreshHistory]);
   const refreshProviders = useCallback(() => {
     providerStatus()
       .then((s) => {
@@ -110,7 +118,7 @@ export default function App() {
 
   useTauriEvent<RecState>(EVT.recState, (e) => setRecording(e.recording));
   useTauriEvent<ModeChanged>(EVT.modeChanged, () => refreshModes());
-  useTauriEvent<unknown>(EVT.historyChanged, () => refreshHistory());
+  useTauriEvent<unknown>(EVT.historyChanged, () => debouncedRefreshHistory());
   useTauriEvent<BackendError>(EVT.error, (e) => {
     // Recording-flow failures (transcription / injection) are shown quietly in
     // the HUD — don't also pop an intrusive dashboard toast for them.
@@ -161,7 +169,13 @@ export default function App() {
     [view, phase],
   );
 
-  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+  useEffect(
+    () => () => {
+      timers.current.forEach(clearTimeout);
+      window.clearTimeout(historyDebounce.current);
+    },
+    [],
+  );
 
   // Keyboard nav (ignored while typing in a field).
   useEffect(() => {
