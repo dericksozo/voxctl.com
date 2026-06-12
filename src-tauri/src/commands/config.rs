@@ -123,19 +123,29 @@ pub struct ProviderStatus {
 }
 
 #[tauri::command]
-pub fn provider_status() -> ProviderStatus {
-    let s = |p: &str| {
-        if key_present(p) {
-            "validated".to_string()
-        } else {
-            "none".to_string()
+pub async fn provider_status() -> ProviderStatus {
+    // Three Keychain round-trips; on the main thread (Tauri v2 default for non-async
+    // commands) a slow Keychain could freeze the UI. Run on the blocking pool (§4.2).
+    tauri::async_runtime::spawn_blocking(|| {
+        let s = |p: &str| {
+            if key_present(p) {
+                "validated".to_string()
+            } else {
+                "none".to_string()
+            }
+        };
+        ProviderStatus {
+            openai: s("openai"),
+            xai: s("xai"),
+            gemini: s("gemini"),
         }
-    };
-    ProviderStatus {
-        openai: s("openai"),
-        xai: s("xai"),
-        gemini: s("gemini"),
-    }
+    })
+    .await
+    .unwrap_or_else(|_| ProviderStatus {
+        openai: "none".to_string(),
+        xai: "none".to_string(),
+        gemini: "none".to_string(),
+    })
 }
 
 /// How a provider authenticates its zero-cost validation request.

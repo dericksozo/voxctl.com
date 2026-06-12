@@ -282,8 +282,12 @@ pub fn all_modes(app: &AppHandle) -> Vec<Mode> {
 }
 
 #[tauri::command]
-pub fn list_modes(app: AppHandle) -> Vec<Mode> {
-    load(&app)
+pub async fn list_modes(app: AppHandle) -> Vec<Mode> {
+    // load() reads (and may rewrite) the mode store; keep that file I/O off the
+    // main thread so list_modes can't freeze the UI event loop (§4.2).
+    tauri::async_runtime::spawn_blocking(move || load(&app))
+        .await
+        .unwrap_or_default()
 }
 
 #[tauri::command]
