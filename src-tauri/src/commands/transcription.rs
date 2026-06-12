@@ -64,7 +64,7 @@ pub async fn retranscribe(app: AppHandle, id: i64, mode_id: String) -> Result<Re
     let wav = std::fs::read(&item.audio_path).map_err(|e| format!("read audio: {e}"))?;
     // Time the re-run the same way the live pipeline does: from request to result.
     let started = std::time::Instant::now();
-    let out = match transcriber.transcribe_file(&wav, &options).await {
+    let out = match transcriber.transcribe_file(wav, &options).await {
         Ok(t) => t,
         Err(e) => {
             // Leave it re-runnable rather than stuck "transcribing".

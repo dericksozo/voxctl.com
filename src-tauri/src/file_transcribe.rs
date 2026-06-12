@@ -99,10 +99,11 @@ impl TranscriptOutput {
 
 #[async_trait::async_trait]
 pub trait FileTranscriber: Send + Sync {
-    /// Transcribe a complete WAV (PCM16) container.
+    /// Transcribe a complete WAV (PCM16) container. Takes ownership of the bytes so
+    /// the multipart part can move them in without an extra copy (§2.2).
     async fn transcribe_file(
         &self,
-        wav: &[u8],
+        wav: Vec<u8>,
         opts: &TranscribeOptions,
     ) -> Result<TranscriptOutput, String>;
 }
@@ -319,8 +320,10 @@ fn client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("unreachable: {e}"))
 }
 
-fn wav_part(wav: &[u8]) -> Result<reqwest::multipart::Part, String> {
-    reqwest::multipart::Part::bytes(wav.to_vec())
+fn wav_part(wav: Vec<u8>) -> Result<reqwest::multipart::Part, String> {
+    // Part::bytes takes ownership (Cow::Owned) — same wire format as before, but no
+    // to_vec() copy of the (up to ~170MB) WAV (§2.2).
+    reqwest::multipart::Part::bytes(wav)
         .file_name("audio.wav")
         .mime_str("audio/wav")
         .map_err(|e| e.to_string())
@@ -337,7 +340,7 @@ struct OpenAiFileTranscriber {
 impl FileTranscriber for OpenAiFileTranscriber {
     async fn transcribe_file(
         &self,
-        wav: &[u8],
+        wav: Vec<u8>,
         opts: &TranscribeOptions,
     ) -> Result<TranscriptOutput, String> {
         // gpt-4o-transcribe-diarize is a separate request shape: it returns speaker
@@ -426,7 +429,7 @@ struct XaiTranscriber {
 impl FileTranscriber for XaiTranscriber {
     async fn transcribe_file(
         &self,
-        wav: &[u8],
+        wav: Vec<u8>,
         opts: &TranscribeOptions,
     ) -> Result<TranscriptOutput, String> {
         // Text fields first; `file` MUST be the last part (per xAI docs).
@@ -503,7 +506,7 @@ struct GeminiTranscriber {
 impl FileTranscriber for GeminiTranscriber {
     async fn transcribe_file(
         &self,
-        wav: &[u8],
+        wav: Vec<u8>,
         opts: &TranscribeOptions,
     ) -> Result<TranscriptOutput, String> {
         let b64 = base64::engine::general_purpose::STANDARD.encode(wav);
@@ -752,7 +755,7 @@ mod tests {
                 diarization: true,
                 ..opts.clone()
             };
-            let res = rt.block_on(tr.transcribe_file(&wav, &opts));
+            let res = rt.block_on(tr.transcribe_file(wav.clone(), &opts));
             eprintln!("{model_id}: {res:?}");
             // A billing/quota error means auth + request shape are correct but the
             // key has no credits — that still verifies we reached the API.

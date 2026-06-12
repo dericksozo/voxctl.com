@@ -188,18 +188,26 @@ pub fn init(app: &AppHandle) -> Result<HistoryDb, String> {
 
 // ---- WAV helpers ----
 
-pub fn write_wav(path: &Path, pcm16: &[i16], rate: u32) -> Result<(), String> {
+/// Encode PCM16 mono into a WAV container in memory (no disk). Lets the same bytes
+/// be written to disk AND handed to the file transcriber without re-reading the
+/// file or an extra copy (§2.2).
+pub fn encode_wav(pcm16: &[i16], rate: u32) -> Result<Vec<u8>, String> {
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate: rate,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
-    let mut w = hound::WavWriter::create(path, spec).map_err(|e| format!("wav create: {e}"))?;
-    for &s in pcm16 {
-        w.write_sample(s).map_err(|e| format!("wav write: {e}"))?;
+    let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
+    {
+        let mut w =
+            hound::WavWriter::new(&mut cursor, spec).map_err(|e| format!("wav create: {e}"))?;
+        for &s in pcm16 {
+            w.write_sample(s).map_err(|e| format!("wav write: {e}"))?;
+        }
+        w.finalize().map_err(|e| format!("wav finalize: {e}"))?;
     }
-    w.finalize().map_err(|e| format!("wav finalize: {e}"))
+    Ok(cursor.into_inner())
 }
 
 #[cfg(test)]
@@ -696,7 +704,8 @@ mod tests {
         let dir = std::env::temp_dir();
         let path = dir.join(format!("voxctl-test-{}.wav", now_millis()));
         let samples: Vec<i16> = (0..1000).map(|i| (i % 256 - 128) as i16 * 100).collect();
-        write_wav(&path, &samples, 24000).unwrap();
+        let bytes = encode_wav(&samples, 24000).unwrap();
+        std::fs::write(&path, bytes).unwrap();
         let back = read_wav(&path.to_string_lossy()).unwrap();
         assert_eq!(samples, back);
         let _ = std::fs::remove_file(&path);
