@@ -155,6 +155,22 @@ export function SettingsPanel({
             {config.captureMode === "toggle" ? t("settings.captureHint.toggle") : t("settings.captureHint.ptt")}
           </p>
         </div>
+        <div className="vx-set-field">
+          <div className="vx-set-card">
+            <div className="vx-set-row">
+              <div className="vx-set-card-text">
+                <div className="vx-set-card-label">{t("settings.clipboard")}</div>
+              </div>
+              <Toggle
+                on={config.copyToClipboard}
+                onToggle={() => set("copyToClipboard", !config.copyToClipboard)}
+                labels={[t("settings.on"), t("settings.off")]}
+                disabled={recording}
+              />
+            </div>
+          </div>
+          <p className="vx-set-field-desc">{t("settings.clipboardSub")}</p>
+        </div>
       </section>
 
       <section className="set-section" data-sec="transcription">
@@ -228,22 +244,6 @@ export function SettingsPanel({
 
       <section className="set-section" data-sec="system">
         <SectionHead id="system" />
-        <div className="vx-set-field">
-          <div className="vx-set-card">
-            <div className="vx-set-row">
-              <div className="vx-set-card-text">
-                <div className="vx-set-card-label">{t("settings.clipboard")}</div>
-              </div>
-              <Toggle
-                on={config.copyToClipboard}
-                onToggle={() => set("copyToClipboard", !config.copyToClipboard)}
-                labels={[t("settings.on"), t("settings.off")]}
-                disabled={recording}
-              />
-            </div>
-          </div>
-          <p className="vx-set-field-desc">{t("settings.clipboardSub")}</p>
-        </div>
         <div className="vx-set-card vx-set-card--stack">
           <div className="vx-set-card-label">{t("settings.appLanguage")}</div>
           <select
