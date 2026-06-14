@@ -106,8 +106,12 @@ async fn archive_audio_now(
         // The row was deleted while we were archiving — drop the orphan file and
         // skip transcription (the result would update a non-existent row).
         let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(format!("{path}.pcm"));
         return Err("recording was removed before archival completed".into());
     }
+    // The full WAV is persisted; the crash-recovery PCM sidecar (Path B, file
+    // mode only) is no longer needed. No-op for live mode, which writes none.
+    let _ = std::fs::remove_file(format!("{path}.pcm"));
     let _ = app.emit(events::HISTORY_CHANGED, ());
     Ok(wav)
 }

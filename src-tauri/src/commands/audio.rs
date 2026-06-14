@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::events::{self, MicLevel, RecState};
 use crate::hud;
@@ -237,6 +237,63 @@ fn finish_capture(mut cap: Capture) -> (Vec<f32>, u32) {
     (samples, cap.sample_rate)
 }
 
+/// Stream a raw PCM16 sidecar to disk during file-mode capture (Path B), so a
+/// crash before stop still leaves recoverable audio. Runs off the audio thread —
+/// the cpal callback only does a non-blocking channel send. Resamples to 24 kHz
+/// (matching the eventual WAV) and flushes ~every second; no fsync, since the
+/// target is process death (dev hot-reload / force-quit), which the OS page cache
+/// survives — full power-loss durability isn't worth the extra I/O.
+fn spawn_sidecar_writer(mut rx: UnboundedReceiver<Vec<f32>>, path: String, input_rate: u32) {
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::Write;
+        let file = match std::fs::File::create(&path) {
+            Ok(f) => f,
+            Err(e) => {
+                log::warn!("sidecar create failed ({path}): {e}");
+                return;
+            }
+        };
+        let mut w = std::io::BufWriter::new(file);
+        let mut rs = crate::resample::StreamResampler::new(input_rate);
+        let mut last_flush = Instant::now();
+        let write_pcm =
+            |w: &mut std::io::BufWriter<std::fs::File>, pcm: &[i16]| -> std::io::Result<()> {
+                for s in pcm {
+                    w.write_all(&s.to_le_bytes())?;
+                }
+                Ok(())
+            };
+        let res = (|| -> std::io::Result<()> {
+            while let Some(block) = rx.blocking_recv() {
+                write_pcm(&mut w, &rs.push(&block))?;
+                if last_flush.elapsed() >= Duration::from_secs(1) {
+                    w.flush()?;
+                    last_flush = Instant::now();
+                }
+            }
+            write_pcm(&mut w, &rs.finish())?;
+            w.flush()
+        })();
+        if let Err(e) = res {
+            log::warn!("sidecar writer error ({path}): {e}");
+        }
+    });
+}
+
+/// Build a transcript sink that persists the live partial transcript against a
+/// history row during capture (Path A), so a crash before stop still leaves
+/// recoverable text. Called at stable segment boundaries by the live session.
+fn partial_transcript_sink(app: &AppHandle, id: i64) -> crate::transcription::TranscriptSink {
+    let app = app.clone();
+    Box::new(move |text: &str| {
+        crate::history::update_partial_transcript(
+            &app.state::<crate::history::HistoryDb>(),
+            id,
+            text,
+        );
+    })
+}
+
 pub fn start(app: &AppHandle) -> Result<(), String> {
     // perf instrumentation (§6 measuring before/after): the press → mic-open
     // latency that clips first words. Logged when `stream.play()` succeeds on
@@ -273,12 +330,31 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
         None
     };
 
+    // Reserve the history row up front (before opening the live session) so the
+    // transcript sink can persist partial text against it during capture — a
+    // crash before stop then still leaves recoverable text (Path A).
+    let lang_label = ctx.language.clone().unwrap_or_else(|| "auto".into());
+    let mode_name = ctx.mode_name.clone().unwrap_or_else(|| "—".into());
+    let (recording_id, audio_path, started_at) = crate::history::reserve_recording(
+        app,
+        &lang_label,
+        &mode_name,
+        ctx.app_name.as_deref(),
+        ctx.website.as_deref(),
+        &ctx.model_id,
+    )?;
+
     let session = match (provider.as_deref(), live_key) {
         (Some("openai"), Some(key)) => Some(OpenAiRealtimeTranscriber::open_session(
             key,
             ctx.options.language.clone(),
+            Some(partial_transcript_sink(app, recording_id)),
         )),
-        (Some("xai"), Some(key)) => Some(crate::xai_live::open_session(key, ctx.options.clone())),
+        (Some("xai"), Some(key)) => Some(crate::xai_live::open_session(
+            key,
+            ctx.options.clone(),
+            Some(partial_transcript_sink(app, recording_id)),
+        )),
         _ => None,
     };
 
@@ -288,28 +364,31 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
         (session, raw_tx, raw_rx, pcm_tx)
     });
 
-    let capture_raw_tx = session_bits
-        .as_ref()
-        .map(|(_, raw_tx, _, _)| raw_tx.clone());
-    let cap = start_capture(app, capture_raw_tx, t0)?;
-    let input_rate = cap.sample_rate;
-
-    let lang_label = ctx.language.clone().unwrap_or_else(|| "auto".into());
-    let mode_name = ctx.mode_name.clone().unwrap_or_else(|| "—".into());
-    let (recording_id, audio_path) = match crate::history::reserve_recording(
-        app,
-        &lang_label,
-        &mode_name,
-        ctx.app_name.as_deref(),
-        ctx.website.as_deref(),
-        &ctx.model_id,
-    ) {
-        Ok(v) => v,
+    // The cpal callback tees raw mono blocks to a single consumer. Live modes
+    // feed the streaming forwarder; file modes feed the PCM16 sidecar writer
+    // (Path B crash recovery), spawned just below once we know the input rate.
+    let (capture_raw_tx, sidecar_rx) = match session_bits.as_ref() {
+        Some((_, raw_tx, _, _)) => (Some(raw_tx.clone()), None),
+        None => {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
+            (Some(tx), Some(rx))
+        }
+    };
+    let cap = match start_capture(app, capture_raw_tx, t0) {
+        Ok(cap) => cap,
         Err(e) => {
-            let _ = finish_capture(cap);
+            // Capture never started — drop the orphan row we just reserved.
+            let _ = crate::history::delete(&app.state::<crate::history::HistoryDb>(), recording_id);
             return Err(e);
         }
     };
+    let input_rate = cap.sample_rate;
+
+    // File mode: start the sidecar writer now that the input rate is known. Blocks
+    // sent before this point are buffered in the unbounded channel.
+    if let Some(rx) = sidecar_rx {
+        spawn_sidecar_writer(rx, format!("{audio_path}.pcm"), input_rate);
+    }
 
     let session = session_bits.map(|(session, raw_tx, raw_rx, pcm_tx)| {
         // The capture thread holds the live sender; drop ours so `raw_rx` closes
@@ -350,6 +429,7 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
         RecState {
             recording: true,
             language,
+            started_at: Some(started_at),
         },
     );
     log::info!("recording started");
@@ -381,6 +461,7 @@ pub fn stop(app: &AppHandle) -> Result<(), String> {
         RecState {
             recording: false,
             language: None,
+            started_at: None,
         },
     );
 

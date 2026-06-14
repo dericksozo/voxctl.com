@@ -23,6 +23,11 @@ pub struct MicLevel {
 pub struct RecState {
     pub recording: bool,
     pub language: Option<String>,
+    /// Unix ms the recording started (= the history row's `created_at`), so the
+    /// footer timer counts from an authoritative instant rather than guessing
+    /// from event-arrival time. `None` on stop.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<i64>,
 }
 
 #[derive(Clone, Serialize)]
