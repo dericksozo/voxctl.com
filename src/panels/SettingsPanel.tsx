@@ -7,7 +7,6 @@ import { ShortcutRecorder } from "../components/ShortcutRecorder";
 import { useConfig } from "../hooks/useConfig";
 import { t } from "../i18n";
 import { AVAILABLE_LOCALES } from "../i18n";
-import { LANGUAGES } from "../lib/languages";
 import { purgeRecordings, requestNotificationPermission, storageStats } from "../lib/ipc";
 import type { CaptureMode, DeleteBehavior, StorageStats } from "../lib/types";
 import {
@@ -21,7 +20,6 @@ import {
 const SECTIONS: { id: string; label: string; desc: string }[] = [
   { id: "providers", label: "settings.sec.providers", desc: "settings.sec.providersDesc" },
   { id: "capture", label: "settings.sec.capture", desc: "settings.sec.captureDesc" },
-  { id: "transcription", label: "settings.sec.transcription", desc: "settings.sec.transcriptionDesc" },
   { id: "audio", label: "settings.sec.audio", desc: "settings.sec.audioDesc" },
   { id: "storage", label: "settings.sec.storage", desc: "settings.sec.storageDesc" },
   { id: "system", label: "settings.sec.system", desc: "settings.sec.systemDesc" },
@@ -170,28 +168,6 @@ export function SettingsPanel({
             </div>
           </div>
           <p className="vx-set-field-desc">{t("settings.clipboardSub")}</p>
-        </div>
-      </section>
-
-      <section className="set-section" data-sec="transcription">
-        <SectionHead id="transcription" />
-        <div className="vx-set-field">
-          <div className="vx-set-card vx-set-card--stack">
-            <div className="vx-set-card-label">{t("settings.transcriptionLanguage")}</div>
-            <select
-              className="set-select"
-              value={config.defaultLanguage ?? "auto"}
-              onChange={(e) => set("defaultLanguage", e.target.value === "auto" ? null : e.target.value)}
-              disabled={recording}
-            >
-              {LANGUAGES.map((l) => (
-                <option key={l.code} value={l.code}>
-                  {l.code === "auto" ? t("settings.autoDetect") : l.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <p className="vx-set-field-desc">{t("settings.alwaysSave")}</p>
         </div>
       </section>
 

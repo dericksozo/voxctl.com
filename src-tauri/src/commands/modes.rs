@@ -599,7 +599,7 @@ fn any_enabled_website_trigger(modes: &[Mode]) -> bool {
 
 /// Build the recording context (language + model + capability options + which
 /// app/website/mode it belongs to) from the resolved active mode. Language
-/// precedence: HUD override → active mode language → config default → auto.
+/// precedence: HUD override → active mode language → auto.
 pub fn resolve_context(app: &AppHandle, override_lang: Option<String>) -> RecordingContext {
     let modes = load(app);
     let pinned = read_store_string(app, PINNED_KEY);
@@ -624,13 +624,11 @@ pub fn resolve_context(app: &AppHandle, override_lang: Option<String>) -> Record
     );
     let matched = resolved.as_ref().map(|(m, _)| m);
 
-    let language = override_lang
-        .or_else(|| {
-            matched.and_then(|m| {
-                (m.language != "auto" && !m.language.is_empty()).then(|| m.language.clone())
-            })
+    let language = override_lang.or_else(|| {
+        matched.and_then(|m| {
+            (m.language != "auto" && !m.language.is_empty()).then(|| m.language.clone())
         })
-        .or_else(|| load_config(app).default_language);
+    });
 
     let reg = registry::effective(app);
     let model_id = matched.map(|m| m.model.clone()).unwrap_or_else(|| {

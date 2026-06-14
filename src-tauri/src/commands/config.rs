@@ -29,7 +29,6 @@ pub struct Config {
     pub copy_to_clipboard: bool,
     pub notify_on_mode_switch: bool,
     pub app_locale: String,
-    pub default_language: Option<String>,
     /// What `×` removes from a recording: "both" (row + WAV) or "transcript"
     /// (row only, keep the WAV on disk). Defaulted for configs saved earlier.
     #[serde(default = "default_delete_behavior")]
@@ -55,7 +54,6 @@ impl Default for Config {
             copy_to_clipboard: false,
             notify_on_mode_switch: false,
             app_locale: "en".into(),
-            default_language: None,
             delete_behavior: default_delete_behavior(),
             onboarding_completed: false,
             accessibility_skipped: false,
