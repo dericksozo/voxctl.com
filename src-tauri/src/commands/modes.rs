@@ -129,8 +129,8 @@ pub fn default_modes() -> Vec<Mode> {
 fn valid_model_ids(app: &AppHandle) -> Vec<String> {
     registry::effective(app)
         .models
-        .into_iter()
-        .map(|m| m.id)
+        .iter()
+        .map(|m| m.id.clone())
         .collect()
 }
 
@@ -223,16 +223,33 @@ fn load(app: &AppHandle) -> Vec<Mode> {
     let valid = valid_model_ids(app);
     if let Ok(store) = app.store(STORE_FILE) {
         if let Some(v) = store.get(KEY) {
-            if let Ok(modes) = serde_json::from_value::<Vec<Mode>>(v) {
-                let modes = dedupe_by_id(
-                    modes
-                        .into_iter()
-                        .map(|m| normalize_mode(m, &valid))
-                        .collect(),
-                );
-                if let Ok(v) = serde_json::to_value(&modes) {
-                    store.set(KEY, v);
-                    let _ = store.save();
+            if let Ok(parsed) = serde_json::from_value::<Vec<Mode>>(v) {
+                let before_len = parsed.len();
+                // normalize_mode only ever rewrites `mode.model`; track whether any
+                // mode's model actually changed, plus whether dedupe dropped a row.
+                let mut changed = false;
+                let normalized: Vec<Mode> = parsed
+                    .into_iter()
+                    .map(|m| {
+                        let before = m.model.clone();
+                        let nm = normalize_mode(m, &valid);
+                        changed |= nm.model != before;
+                        nm
+                    })
+                    .collect();
+                let modes = dedupe_by_id(normalized);
+                changed |= modes.len() != before_len;
+                // load() runs on every record start, every modes IPC call, and —
+                // via recompute_and_emit — on every system-wide app switch. Only
+                // persist when normalization actually changed something; otherwise
+                // this was a serialize + file write + fsync for a pure read
+                // (perf §1.2). After the one-time repair following a registry
+                // change, this branch becomes a no-op.
+                if changed {
+                    if let Ok(v) = serde_json::to_value(&modes) {
+                        store.set(KEY, v);
+                        let _ = store.save();
+                    }
                 }
                 ensure_default_valid(app, &modes);
                 return modes;
@@ -265,8 +282,12 @@ pub fn all_modes(app: &AppHandle) -> Vec<Mode> {
 }
 
 #[tauri::command]
-pub fn list_modes(app: AppHandle) -> Vec<Mode> {
-    load(&app)
+pub async fn list_modes(app: AppHandle) -> Vec<Mode> {
+    // load() reads (and may rewrite) the mode store; keep that file I/O off the
+    // main thread so list_modes can't freeze the UI event loop (§4.2).
+    tauri::async_runtime::spawn_blocking(move || load(&app))
+        .await
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -416,14 +437,19 @@ pub fn resolve_active_mode(
 }
 
 /// Frontmost app/website for auto-matching. None while pinned (irrelevant) or
-/// while VOXCTL itself is frontmost (keep the current mode).
-fn current_match_context(pinned: bool) -> (Option<String>, Option<String>) {
+/// while VOXCTL itself is frontmost (keep the current mode). `want_url` gates the
+/// expensive focused_url() walk to when a website trigger could actually use it.
+fn current_match_context(pinned: bool, want_url: bool) -> (Option<String>, Option<String>) {
     if pinned {
         return (None, None);
     }
     match macos::frontmost_app() {
         Some((name, bundle)) if bundle.as_deref() != Some(SELF_BUNDLE) => {
-            let host = macos::focused_url().as_deref().and_then(macos::host_of);
+            let host = if want_url {
+                macos::focused_url().as_deref().and_then(macos::host_of)
+            } else {
+                None
+            };
             (Some(name), host)
         }
         _ => (None, None),
@@ -473,7 +499,8 @@ pub fn recompute_and_emit(app: &AppHandle) {
     let modes = load(app);
     let pinned = read_store_string(app, PINNED_KEY);
     let default = read_store_string(app, DEFAULT_KEY);
-    let (app_name, host) = current_match_context(pinned.is_some());
+    let (app_name, host) =
+        current_match_context(pinned.is_some(), any_enabled_website_trigger(&modes));
     let resolved = resolve_active_mode(
         &modes,
         pinned.as_deref(),
@@ -536,6 +563,40 @@ pub fn refresh_active_mode(app: &AppHandle) {
     recompute_and_emit(app);
 }
 
+/// Debounced, off-main-thread driver for app-switch recomputes. The NSWorkspace
+/// activation notification fires on the main thread; running the store reads +
+/// AX walk there blocked VOXCTL's event loop on every Cmd-Tab system-wide (perf
+/// §3.1). The returned callback just enqueues a tick (cheap, main-thread-safe);
+/// a worker thread coalesces a burst of switches and runs only the last one off
+/// the main thread, re-reading the frontmost app once things settle.
+pub fn spawn_app_switch_debouncer(app: AppHandle) -> impl Fn() + Send + Sync + 'static {
+    // SyncSender (unlike Sender) is Sync, so the callback satisfies
+    // observe_app_switches' Fn + Send + Sync bound. Buffer of 1 + try_send drops
+    // extra ticks in a burst — we only need to know "something changed".
+    let (tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
+    std::thread::spawn(move || {
+        const DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(150);
+        while rx.recv().is_ok() {
+            // Keep resetting the window while switches keep arriving; settle on a
+            // quiet gap, then recompute once.
+            while rx.recv_timeout(DEBOUNCE).is_ok() {}
+            refresh_active_mode(&app);
+        }
+    });
+    move || {
+        let _ = tx.try_send(());
+    }
+}
+
+/// Whether any enabled mode auto-matches on a website. When none do, the focused
+/// URL can never change the resolved mode, so the focused_url() AX-tree walk can
+/// be skipped on the hot paths (perf §1.1/§3.1).
+fn any_enabled_website_trigger(modes: &[Mode]) -> bool {
+    modes
+        .iter()
+        .any(|m| m.enabled && !m.trigger_websites.is_empty())
+}
+
 /// Build the recording context (language + model + capability options + which
 /// app/website/mode it belongs to) from the resolved active mode. Language
 /// precedence: HUD override → active mode language → config default → auto.
@@ -546,7 +607,14 @@ pub fn resolve_context(app: &AppHandle, override_lang: Option<String>) -> Record
     // At record time VOXCTL is not frontmost (hotkey pressed from the target
     // app), so the frontmost app is the real auto-match target.
     let app_name = macos::frontmost_app().map(|(n, _)| n);
-    let host = macos::focused_url().as_deref().and_then(macos::host_of);
+    // Only walk the AX tree for the focused URL when a website trigger could
+    // actually use it; otherwise the URL can't change the match, so skip the
+    // expensive probe on the press→record hot path (perf §1.1).
+    let host = if any_enabled_website_trigger(&modes) {
+        macos::focused_url().as_deref().and_then(macos::host_of)
+    } else {
+        None
+    };
     let resolved = resolve_active_mode(
         &modes,
         pinned.as_deref(),

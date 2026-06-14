@@ -8,8 +8,19 @@ use crate::events;
 use crate::history::{self, HistoryDb, HistoryItem, StorageStats};
 
 #[tauri::command]
-pub fn list_history(app: AppHandle) -> Vec<HistoryItem> {
-    history::list(&app.state::<HistoryDb>())
+pub async fn list_history(app: AppHandle) -> Vec<HistoryItem> {
+    // Tauri v2 runs non-async commands on the main thread; a full archive read +
+    // serialize would freeze the UI event loop. Run it on the blocking pool (§4.2).
+    tauri::async_runtime::spawn_blocking(move || history::list(&app.state::<HistoryDb>()))
+        .await
+        .unwrap_or_default()
+}
+
+/// Word/speaker detail for one recording — the arrays list_history omits, fetched
+/// on demand when a history card is expanded (perf §4.1).
+#[tauri::command]
+pub fn get_history_detail(app: AppHandle, id: i64) -> Option<history::HistoryDetail> {
+    history::detail(&app.state::<HistoryDb>(), id)
 }
 
 /// Whether a `×` delete should also remove the WAV (delete-behavior setting).
@@ -80,16 +91,4 @@ pub fn increment_copy(app: AppHandle, id: i64) -> Result<i64, String> {
     let count = history::increment_copy(&app.state::<HistoryDb>(), id);
     let _ = app.emit(events::HISTORY_CHANGED, ());
     Ok(count)
-}
-
-/// Return the recording's WAV bytes for in-webview playback.
-#[tauri::command]
-pub fn read_audio(app: AppHandle, id: i64) -> Result<Vec<u8>, String> {
-    let item = history::get(&app.state::<HistoryDb>(), id).ok_or("recording not found")?;
-    match item.audio_status.as_str() {
-        "capturing" | "saving" => return Err("Audio is still being saved.".into()),
-        "failed" => return Err("Audio is unavailable for this recording.".into()),
-        _ => {}
-    }
-    std::fs::read(&item.audio_path).map_err(|e| format!("read audio: {e}"))
 }

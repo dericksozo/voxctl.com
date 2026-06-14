@@ -9,7 +9,7 @@ use crate::registry::{self, Registry};
 /// The effective registry (cached remote copy if present, else bundled).
 #[tauri::command]
 pub fn get_registry(app: AppHandle) -> Registry {
-    registry::effective(&app)
+    registry::effective(&app).as_ref().clone()
 }
 
 /// Best-effort remote refresh: fetch the remote registry and cache it as the
@@ -24,7 +24,7 @@ pub async fn refresh_registry(app: AppHandle) -> Registry {
         }
         Err(e) => {
             log::warn!("registry refresh failed, keeping bundled/cached: {e}");
-            registry::effective(&app)
+            registry::effective(&app).as_ref().clone()
         }
     }
 }

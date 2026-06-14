@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   ActiveMode,
   Config,
+  HistoryDetail,
   HistoryItem,
   Mode,
   PermissionStatus,
@@ -63,6 +64,10 @@ export const bootstrapDefaultMode = (provider: ProviderId) =>
 
 // --- History ---
 export const listHistory = () => invoke<HistoryItem[]>("list_history");
+/** Word/speaker detail for one recording — the arrays list_history omits, fetched
+ *  on demand when a history card is expanded. */
+export const getHistoryDetail = (id: number) =>
+  invoke<HistoryDetail>("get_history_detail", { id });
 export const deleteRecording = (id: number) => invoke<void>("delete_recording", { id });
 export const deleteRecordings = (ids: number[]) => invoke<void>("delete_recordings", { ids });
 export const toggleFavorite = (id: number) => invoke<boolean>("toggle_favorite", { id });
@@ -76,8 +81,6 @@ export type RerunResult = {
 /** Re-run a saved recording through a chosen (file-capable) mode. */
 export const retranscribe = (id: number, modeId: string) =>
   invoke<RerunResult>("retranscribe", { id, modeId });
-/** Returns the recording's WAV bytes for in-webview playback. */
-export const readAudio = (id: number) => invoke<number[]>("read_audio", { id });
 
 // --- Storage ---
 export const storageStats = () => invoke<StorageStats>("storage_stats");

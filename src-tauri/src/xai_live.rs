@@ -187,6 +187,7 @@ enum Flow {
 fn handle_frame(
     frame: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>,
     acc: &mut Accumulator,
+    debug: bool,
 ) -> Result<Flow, String> {
     let msg = match frame {
         Some(Ok(m)) => m,
@@ -202,7 +203,7 @@ fn handle_frame(
     let Ok(v) = serde_json::from_str::<Value>(txt) else {
         return Ok(Flow::Continue);
     };
-    if std::env::var("VOXCTL_WS_DEBUG").is_ok() {
+    if debug {
         eprintln!("EVENT {txt}");
     }
     match v.get("type").and_then(Value::as_str).unwrap_or("") {
@@ -257,6 +258,8 @@ async fn run_session(
     let (mut write, mut read) = ws.split();
 
     let mut acc = Accumulator::default();
+    // Read the debug-dump env var once per session, not once per WS frame (§3.3).
+    let ws_debug = std::env::var("VOXCTL_WS_DEBUG").is_ok();
 
     // Phase 1: stream audio frames as captured; read events concurrently.
     loop {
@@ -278,7 +281,7 @@ async fn run_session(
                 }
             },
             frame = read.next() => {
-                match handle_frame(frame, &mut acc)? {
+                match handle_frame(frame, &mut acc, ws_debug)? {
                     Flow::Done => {
                         let _ = write.send(Message::Close(None)).await;
                         return Ok(acc.final_output());
@@ -295,7 +298,7 @@ async fn run_session(
     // after a short grace period over keeping the user in "processing".
     let grace = async {
         loop {
-            match handle_frame(read.next().await, &mut acc)? {
+            match handle_frame(read.next().await, &mut acc, ws_debug)? {
                 Flow::Done | Flow::Closed => {
                     return Ok::<TranscriptOutput, String>(acc.final_output())
                 }
@@ -313,7 +316,7 @@ async fn run_session(
             } else {
                 let drain = async {
                     loop {
-                        match handle_frame(read.next().await, &mut acc)? {
+                        match handle_frame(read.next().await, &mut acc, ws_debug)? {
                             Flow::Done | Flow::Closed => {
                                 return Ok::<TranscriptOutput, String>(acc.final_output())
                             }

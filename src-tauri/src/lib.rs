@@ -100,11 +100,12 @@ pub fn run() {
             // shows it — building it lazily during recording stole focus.
             hud::ensure_hud(app.handle());
 
-            // Auto-switch the active Mode as the frontmost app changes.
-            let handle = app.handle().clone();
-            platform::macos::observe_app_switches(move || {
-                commands::modes::refresh_active_mode(&handle);
-            });
+            // Auto-switch the active Mode as the frontmost app changes. The
+            // notification fires on the main thread, so the callback only enqueues
+            // a tick; the debouncer coalesces bursts and runs the recompute (AX
+            // walk included) off the main thread (perf §3.1).
+            let on_app_switch = commands::modes::spawn_app_switch_debouncer(app.handle().clone());
+            platform::macos::observe_app_switches(on_app_switch);
 
             // Retry failed transcriptions in the background (and reconcile any
             // rows interrupted mid-transcription on a previous run).
@@ -150,11 +151,11 @@ pub fn run() {
             commands::permissions::request_notification_permission,
             commands::permissions::open_permission_settings,
             commands::history::list_history,
+            commands::history::get_history_detail,
             commands::history::delete_recording,
             commands::history::delete_recordings,
             commands::history::toggle_favorite,
             commands::history::increment_copy,
-            commands::history::read_audio,
             commands::history::storage_stats,
             commands::history::purge_recordings,
             commands::transcription::retranscribe,

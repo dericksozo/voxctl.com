@@ -69,3 +69,14 @@ hound = "3"
 # Offline language detection so "auto" recordings store the actual language
 # (e.g. "en", "ja") for the history chip — pure-Rust, no network.
 whatlang = "0.16"
+
+# Release tuning (§6.1). lto + codegen-units=1 give a real speedup on the
+# serde/tokio/reqwest-heavy hot paths (registry/IPC/JSON) plus a smaller binary;
+# strip drops debug symbols. `panic = "abort"` is intentionally NOT set: Tauri and
+# tokio catch panics in command/task handlers (we await JoinErrors from
+# spawn_blocking), so aborting would turn a single recoverable panic into a
+# whole-process crash — that needs runtime verification before flipping.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

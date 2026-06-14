@@ -42,11 +42,21 @@ pub struct HistoryItem {
     /// in milliseconds (0 until a transcription completes).
     pub transcription_ms: i64,
     /// Per-word timing (present only when the mode/model produced word timestamps).
+    /// Empty in list payloads — fetched lazily via detail() on expand (perf §4.1).
     #[serde(default)]
     pub word_stamps: Vec<WordStamp>,
     /// Speaker-attributed segments (present only when diarization produced them).
+    /// Empty in list payloads — see word_stamps.
     #[serde(default)]
     pub speakers: Vec<SpeakerSeg>,
+    /// Whether word-level timestamps exist (gates the STAMPS tab without shipping
+    /// the potentially-MB word array). Always set; the array is fetched on expand.
+    #[serde(default)]
+    pub has_word_stamps: bool,
+    /// Whether speaker info exists — top-level segments OR word-level speaker
+    /// labels (matches the UI's speakerSegments()). Gates the SPEAKERS tab.
+    #[serde(default)]
+    pub has_speakers: bool,
 }
 
 /// Parse the persisted `extra_json` blob (`{ words, speakers }`) into the typed
@@ -154,6 +164,10 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     if !have.iter().any(|c| c == "extra_json") {
         conn.execute_batch("ALTER TABLE recordings ADD COLUMN extra_json TEXT")?;
     }
+    // Index `status` for the retry worker's poll and startup reconciliation
+    // (perf §3.3/§4.1). Created here (not in create_schema) so it runs only
+    // after the status column is guaranteed to exist on legacy databases.
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status)")?;
     Ok(())
 }
 
@@ -161,6 +175,12 @@ pub fn init(app: &AppHandle) -> Result<HistoryDb, String> {
     let dir = data_dir(app);
     std::fs::create_dir_all(&dir).map_err(|e| format!("create data dir: {e}"))?;
     let conn = Connection::open(dir.join("voxctl.db")).map_err(|e| format!("open db: {e}"))?;
+    // WAL + synchronous=NORMAL (perf §1.3/§4.1): commits stop fsync-ing the whole
+    // DB, so every small write — reserve_recording on the record-start hot path,
+    // status flips, copy counts — is dramatically cheaper, and reads proceed
+    // concurrently with writes on the single shared connection. Set once per open.
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+        .map_err(|e| format!("pragmas: {e}"))?;
     create_schema(&conn).map_err(|e| format!("schema: {e}"))?;
     migrate(&conn).map_err(|e| format!("migrate: {e}"))?;
     Ok(HistoryDb(Mutex::new(conn)))
@@ -168,18 +188,33 @@ pub fn init(app: &AppHandle) -> Result<HistoryDb, String> {
 
 // ---- WAV helpers ----
 
-pub fn write_wav(path: &Path, pcm16: &[i16], rate: u32) -> Result<(), String> {
+/// Encode PCM16 mono into a WAV container in memory (no disk). Lets the same bytes
+/// be written to disk AND handed to the file transcriber without re-reading the
+/// file or an extra copy (§2.2).
+pub fn encode_wav(pcm16: &[i16], rate: u32) -> Result<Vec<u8>, String> {
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate: rate,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
-    let mut w = hound::WavWriter::create(path, spec).map_err(|e| format!("wav create: {e}"))?;
-    for &s in pcm16 {
-        w.write_sample(s).map_err(|e| format!("wav write: {e}"))?;
+    let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
+    {
+        let mut w =
+            hound::WavWriter::new(&mut cursor, spec).map_err(|e| format!("wav create: {e}"))?;
+        {
+            // hound's bulk i16 fast path: pack all samples in one pass instead of a
+            // bounds-checked write_sample() call per sample (§2.3). Byte-identical
+            // output (covered by wav_roundtrip), just several× faster on long files.
+            let mut sw = w.get_i16_writer(pcm16.len() as u32);
+            for &s in pcm16 {
+                sw.write_sample(s);
+            }
+            sw.flush().map_err(|e| format!("wav write: {e}"))?;
+        }
+        w.finalize().map_err(|e| format!("wav finalize: {e}"))?;
     }
-    w.finalize().map_err(|e| format!("wav finalize: {e}"))
+    Ok(cursor.into_inner())
 }
 
 #[cfg(test)]
@@ -239,8 +274,12 @@ fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<HistoryItem> {
         transcription_ms: row.get(16)?,
         word_stamps: Vec::new(),
         speakers: Vec::new(),
+        has_word_stamps: false,
+        has_speakers: false,
     };
     let (word_stamps, speakers) = parse_extra(row.get::<_, Option<String>>(17)?);
+    item.has_word_stamps = !word_stamps.is_empty();
+    item.has_speakers = !speakers.is_empty() || word_stamps.iter().any(|w| w.speaker.is_some());
     item.word_stamps = word_stamps;
     item.speakers = speakers;
     Ok(item)
@@ -248,6 +287,43 @@ fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<HistoryItem> {
 
 const SELECT_COLS: &str =
     "id, created_at, transcript, language, mode_name, app_name, website, duration_secs, words, favorite, copy_count, audio_path, status, model_id, audio_bytes, audio_status, transcription_ms, extra_json";
+
+/// Columns for the list view: everything in SELECT_COLS *except* extra_json, plus
+/// two cheap flags derived in SQL. The (potentially MB) word/speaker arrays never
+/// leave SQLite or cross IPC — fetched lazily via detail() on expand (perf §4.1).
+/// instr() matches a field key *with its colon* (`"word":` / `"speaker":`), which
+/// never collides with the plural top-level keys (`"words"` / `"speakers"`):
+///   - any `"word":`    ⟺ the words array is non-empty (STAMPS tab)
+///   - any `"speaker":` ⟺ a SpeakerSeg or a word-level speaker exists (SPEAKERS tab)
+const LIST_COLS: &str = "id, created_at, transcript, language, mode_name, app_name, website, duration_secs, words, favorite, copy_count, audio_path, status, model_id, audio_bytes, audio_status, transcription_ms, (COALESCE(instr(extra_json, '\"word\":'), 0) > 0), (COALESCE(instr(extra_json, '\"speaker\":'), 0) > 0)";
+
+/// Row → list item: full metadata + transcript, but no word/speaker arrays (the
+/// flags at columns 17/18 gate the detail tabs instead). See LIST_COLS.
+fn row_to_list_item(row: &rusqlite::Row) -> rusqlite::Result<HistoryItem> {
+    Ok(HistoryItem {
+        id: row.get(0)?,
+        created_at: row.get(1)?,
+        transcript: row.get(2)?,
+        language: row.get(3)?,
+        mode_name: row.get(4)?,
+        app_name: row.get(5)?,
+        website: row.get(6)?,
+        duration_secs: row.get(7)?,
+        words: row.get(8)?,
+        favorite: row.get::<_, i64>(9)? != 0,
+        copy_count: row.get(10)?,
+        audio_path: row.get(11)?,
+        status: row.get(12)?,
+        model_id: row.get(13)?,
+        audio_bytes: row.get(14)?,
+        audio_status: row.get(15)?,
+        transcription_ms: row.get(16)?,
+        word_stamps: Vec::new(),
+        speakers: Vec::new(),
+        has_word_stamps: row.get::<_, i64>(17)? != 0,
+        has_speakers: row.get::<_, i64>(18)? != 0,
+    })
+}
 
 fn next_recording_path(app: &AppHandle, created_at: i64) -> PathBuf {
     let n = FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -313,6 +389,28 @@ pub fn update_result(
     let _ = conn.execute(
         "UPDATE recordings SET transcript = ?2, language = ?3, words = ?4, status = ?5, transcription_ms = ?6, extra_json = ?7 WHERE id = ?1",
         params![id, transcript, language, words, status, transcription_ms, extra_json],
+    );
+}
+
+/// Like `update_result` but also sets `model_id` in the same statement — used by
+/// re-run, where a recording is re-transcribed through a different mode's model.
+/// One UPDATE instead of the previous update_result + set_model_id pair (perf §4.1).
+#[allow(clippy::too_many_arguments)]
+pub fn update_result_and_model(
+    db: &HistoryDb,
+    id: i64,
+    transcript: &str,
+    language: &str,
+    status: &str,
+    transcription_ms: i64,
+    extra_json: Option<&str>,
+    model_id: &str,
+) {
+    let conn = db.0.lock().unwrap();
+    let words = transcript.split_whitespace().count() as i64;
+    let _ = conn.execute(
+        "UPDATE recordings SET transcript = ?2, language = ?3, words = ?4, status = ?5, transcription_ms = ?6, extra_json = ?7, model_id = ?8 WHERE id = ?1",
+        params![id, transcript, language, words, status, transcription_ms, extra_json, model_id],
     );
 }
 
@@ -403,8 +501,12 @@ pub fn list_by_status(db: &HistoryDb, status: &str) -> Vec<HistoryItem> {
 }
 
 pub fn list(db: &HistoryDb) -> Vec<HistoryItem> {
+    // perf instrumentation (§6 measuring before/after): DB scan + extra_json
+    // parse cost grows with the archive — log duration + row count so the
+    // pagination work (perf/06) is provable. Cheap; gated behind `debug`.
+    let t0 = std::time::Instant::now();
     let conn = db.0.lock().unwrap();
-    let sql = format!("SELECT {SELECT_COLS} FROM recordings ORDER BY created_at DESC");
+    let sql = format!("SELECT {LIST_COLS} FROM recordings ORDER BY created_at DESC");
     let mut stmt = match conn.prepare(&sql) {
         Ok(s) => s,
         Err(e) => {
@@ -412,20 +514,52 @@ pub fn list(db: &HistoryDb) -> Vec<HistoryItem> {
             return Vec::new();
         }
     };
-    let rows = stmt.query_map([], row_to_item);
-    match rows {
+    let rows = stmt.query_map([], row_to_list_item);
+    let items: Vec<HistoryItem> = match rows {
         Ok(iter) => iter.filter_map(Result::ok).collect(),
         Err(e) => {
             log::error!("list query: {e}");
             Vec::new()
         }
-    }
+    };
+    log::debug!(
+        "perf: list_history {} rows in {} ms",
+        items.len(),
+        t0.elapsed().as_millis()
+    );
+    items
 }
 
 pub fn get(db: &HistoryDb, id: i64) -> Option<HistoryItem> {
     let conn = db.0.lock().unwrap();
     let sql = format!("SELECT {SELECT_COLS} FROM recordings WHERE id = ?1");
     conn.query_row(&sql, params![id], row_to_item).ok()
+}
+
+/// Lazily-fetched structured detail for one recording — the word/speaker arrays
+/// the list view omits (perf §4.1). Fetched when a history card is expanded.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryDetail {
+    pub word_stamps: Vec<WordStamp>,
+    pub speakers: Vec<SpeakerSeg>,
+}
+
+/// Word/speaker detail for a single recording (just the one row's extra_json).
+pub fn detail(db: &HistoryDb, id: i64) -> Option<HistoryDetail> {
+    let conn = db.0.lock().unwrap();
+    let extra: Option<String> = conn
+        .query_row(
+            "SELECT extra_json FROM recordings WHERE id = ?1",
+            params![id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .ok()?;
+    let (word_stamps, speakers) = parse_extra(extra);
+    Some(HistoryDetail {
+        word_stamps,
+        speakers,
+    })
 }
 
 /// Delete a row; returns the audio path so the caller can remove the file.
@@ -471,30 +605,31 @@ pub fn increment_copy(db: &HistoryDb, id: i64) -> i64 {
     .unwrap_or(0)
 }
 
-/// Set the model id (after a re-run through a different mode).
-pub fn set_model_id(db: &HistoryDb, id: i64, model_id: &str) {
-    let conn = db.0.lock().unwrap();
-    let _ = conn.execute(
-        "UPDATE recordings SET model_id = ?2 WHERE id = ?1",
-        params![id, model_id],
-    );
-}
-
 /// Delete multiple rows; returns each removed row's audio path so the caller can
 /// decide whether to also remove the file (per the delete-behavior setting).
 pub fn delete_many(db: &HistoryDb, ids: &[i64]) -> Vec<String> {
-    let conn = db.0.lock().unwrap();
+    let mut conn = db.0.lock().unwrap();
     let mut paths = Vec::new();
+    // One transaction instead of N implicit ones — a single commit for the whole
+    // batch rather than a fsync per row (perf §4.1).
+    let tx = match conn.transaction() {
+        Ok(t) => t,
+        Err(e) => {
+            log::error!("delete_many transaction: {e}");
+            return paths;
+        }
+    };
     for &id in ids {
-        if let Ok(p) = conn.query_row(
+        if let Ok(p) = tx.query_row(
             "SELECT audio_path FROM recordings WHERE id = ?1",
             params![id],
             |r| r.get::<_, String>(0),
         ) {
             paths.push(p);
         }
-        let _ = conn.execute("DELETE FROM recordings WHERE id = ?1", params![id]);
+        let _ = tx.execute("DELETE FROM recordings WHERE id = ?1", params![id]);
     }
+    let _ = tx.commit();
     paths
 }
 
@@ -576,7 +711,8 @@ mod tests {
         let dir = std::env::temp_dir();
         let path = dir.join(format!("voxctl-test-{}.wav", now_millis()));
         let samples: Vec<i16> = (0..1000).map(|i| (i % 256 - 128) as i16 * 100).collect();
-        write_wav(&path, &samples, 24000).unwrap();
+        let bytes = encode_wav(&samples, 24000).unwrap();
+        std::fs::write(&path, bytes).unwrap();
         let back = read_wav(&path.to_string_lossy()).unwrap();
         assert_eq!(samples, back);
         let _ = std::fs::remove_file(&path);

@@ -5,7 +5,7 @@
 //! file mode, or add a key).
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager};
@@ -20,10 +20,20 @@ const FIRST_DELAY: Duration = Duration::from_secs(15);
 const INTERVAL: Duration = Duration::from_secs(30);
 const MAX_ATTEMPTS: u32 = 5;
 
-/// In-memory per-recording attempt counter (resets on restart, which is fine —
-/// a fresh launch is a reasonable reason to try again).
-#[derive(Default)]
-pub struct RetryState(pub Mutex<HashMap<i64, u32>>);
+/// In-memory per-recording attempt counter (resets on restart, which is fine — a
+/// fresh launch is a reasonable reason to try again) plus a Notify the worker
+/// waits on so a freshly-failed row is retried promptly instead of waiting out
+/// the poll interval (§3.3).
+pub struct RetryState(pub Mutex<HashMap<i64, u32>>, pub Arc<tokio::sync::Notify>);
+
+impl Default for RetryState {
+    fn default() -> Self {
+        Self(
+            Mutex::new(HashMap::new()),
+            Arc::new(tokio::sync::Notify::new()),
+        )
+    }
+}
 
 /// Reconcile interrupted rows, then loop retrying `failed` rows.
 pub fn spawn(app: AppHandle) {
@@ -42,11 +52,17 @@ pub fn spawn(app: AppHandle) {
         let _ = app.emit(events::HISTORY_CHANGED, ());
     }
 
+    let notify = app.state::<RetryState>().1.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(FIRST_DELAY).await;
         loop {
             retry_failed(&app).await;
-            tokio::time::sleep(INTERVAL).await;
+            // Wake early when a fresh failure is signalled, else poll on the
+            // interval (the indexed status query is cheap either way).
+            tokio::select! {
+                _ = notify.notified() => {}
+                _ = tokio::time::sleep(INTERVAL) => {}
+            }
         }
     });
 }
@@ -89,7 +105,7 @@ async fn retry_failed(app: &AppHandle) {
             continue;
         };
         let started = std::time::Instant::now();
-        match transcriber.transcribe_file(&wav, &opts).await {
+        match transcriber.transcribe_file(wav, &opts).await {
             Ok(out) if !out.text.trim().is_empty() => {
                 let language = crate::lang_detect::resolve(opts.language.as_deref(), &out.text);
                 history::update_result(

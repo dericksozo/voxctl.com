@@ -48,7 +48,7 @@ pub fn on_recording_finished(
                 session.finish().await
             }
             None => match archive_audio_now(&app, id, &audio_path, samples, rate).await {
-                Ok(()) => transcribe_file(&app, &ctx, &audio_path).await,
+                Ok(wav) => transcribe_file(&app, &ctx, wav).await,
                 Err(e) => {
                     let db = app.state::<HistoryDb>();
                     history::set_audio_status(&db, id, "failed");
@@ -58,7 +58,12 @@ pub fn on_recording_finished(
             },
         };
 
-        finalize(&app, id, &ctx, result, started.elapsed().as_millis() as i64);
+        // perf instrumentation (§6 measuring before/after): stop → transcript
+        // ready. Mirrors the persisted `transcription_ms` so the WAV-buffer /
+        // resample work (perf/09-11) shows up against a stable baseline.
+        let elapsed_ms = started.elapsed().as_millis() as i64;
+        log::debug!("perf: stop→transcript {elapsed_ms} ms (id {id})");
+        finalize(&app, id, &ctx, result, elapsed_ms);
     });
 }
 
@@ -73,30 +78,45 @@ fn archive_audio(app: AppHandle, id: i64, path: String, samples: Vec<f32>, rate:
     });
 }
 
+/// Resample, build the WAV container once in memory, persist it to disk, and
+/// return the same bytes so the file transcriber can use them without re-reading
+/// the file (§2.2).
 async fn archive_audio_now(
     app: &AppHandle,
     id: i64,
     path: &str,
     samples: Vec<f32>,
     rate: u32,
-) -> Result<(), String> {
-    let pcm16 = resample::resample_to_pcm16_24k(&samples, rate);
-    history::write_wav(std::path::Path::new(path), &pcm16, resample::TARGET_RATE)?;
-    let bytes = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0);
+) -> Result<Vec<u8>, String> {
+    // Resample (a multi-second sinc pass), WAV encode, and the file write are all
+    // blocking/CPU-bound — run them on the blocking pool so they don't occupy a
+    // tokio worker on the async runtime (§2.3).
+    let target = resample::TARGET_RATE;
+    let path_owned = path.to_string();
+    let wav = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let pcm16 = resample::resample_to_pcm16_24k(&samples, rate);
+        let wav = history::encode_wav(&pcm16, target)?;
+        std::fs::write(&path_owned, &wav).map_err(|e| format!("write wav: {e}"))?;
+        Ok(wav)
+    })
+    .await
+    .map_err(|e| format!("archive task: {e}"))??;
     let db = app.state::<HistoryDb>();
-    if !history::update_audio_result(&db, id, bytes, "ready") {
+    if !history::update_audio_result(&db, id, wav.len() as i64, "ready") {
+        // The row was deleted while we were archiving — drop the orphan file and
+        // skip transcription (the result would update a non-existent row).
         let _ = std::fs::remove_file(path);
-        return Ok(());
+        return Err("recording was removed before archival completed".into());
     }
     let _ = app.emit(events::HISTORY_CHANGED, ());
-    Ok(())
+    Ok(wav)
 }
 
 /// Transcribe the saved WAV through the active mode's model + capability options.
 async fn transcribe_file(
     app: &AppHandle,
     ctx: &RecordingContext,
-    path: &str,
+    wav: Vec<u8>,
 ) -> Result<file_transcribe::TranscriptOutput, String> {
     let reg = registry::effective(app);
     let model = reg
@@ -105,8 +125,8 @@ async fn transcribe_file(
     let key = config::get_api_key(&model.provider).ok_or_else(|| NO_KEY.to_string())?;
     let transcriber = file_transcribe::file_transcriber_for(model, key)
         .ok_or_else(|| format!("no file transcriber for {}", model.provider))?;
-    let wav = std::fs::read(path).map_err(|e| format!("read wav: {e}"))?;
-    transcriber.transcribe_file(&wav, &ctx.options).await
+    // The WAV bytes were just built in memory by archive_audio_now — no re-read.
+    transcriber.transcribe_file(wav, &ctx.options).await
 }
 
 /// Record the transcription outcome on the row, deliver the text, and settle the
@@ -207,6 +227,11 @@ fn handle_failure(app: &AppHandle, id: i64, ctx: &RecordingContext, err: &str) {
         "failed"
     };
     history::set_status(&db, id, status);
+    if status == "failed" {
+        // Wake the retry worker so a freshly-failed row is retried promptly
+        // rather than after up to one poll interval (§3.3).
+        app.state::<crate::retry::RetryState>().1.notify_one();
+    }
 
     let msg = if no_key {
         "No API key for this mode's provider. Add one in Settings, then re-run from History."
