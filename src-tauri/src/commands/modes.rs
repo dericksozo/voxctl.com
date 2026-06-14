@@ -558,6 +558,19 @@ pub fn recompute_and_emit(app: &AppHandle) {
 /// switch. Skips recompute while VOXCTL is frontmost (keep the current mode),
 /// unless a mode is pinned (sticky regardless of the frontmost app).
 pub fn refresh_active_mode(app: &AppHandle) {
+    // Lock the active mode while a recording is in flight: a recording started in
+    // one mode must stay in that mode even if the user switches apps/websites
+    // mid-utterance. (Transcription already uses the start-time context; this
+    // keeps the displayed active mode from flipping.) stop() re-syncs afterwards.
+    if app
+        .state::<crate::commands::audio::RecorderState>()
+        .0
+        .lock()
+        .unwrap()
+        .recording
+    {
+        return;
+    }
     if read_store_string(app, PINNED_KEY).is_none() {
         if let Some((_, bundle)) = macos::frontmost_app() {
             if bundle.as_deref() == Some(SELF_BUNDLE) {

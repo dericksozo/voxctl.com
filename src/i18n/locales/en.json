@@ -137,6 +137,7 @@
 
   "mode.switch": "SWITCH MODE",
   "mode.unpin": "UNPIN (RESUME AUTO)",
+  "mode.lockedRecording": "MODE IS LOCKED WHILE RECORDING",
   "mode.reason.pinned": "PINNED",
   "mode.reason.auto": "AUTO",
   "mode.reason.default": "DEFAULT",
