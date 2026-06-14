@@ -197,6 +197,7 @@ export function ModesPanel({
               on={m.enabled}
               onToggle={() => toggle(m)}
               labels={[t("modes.enabled"), t("modes.disabled")]}
+              disabled={isDefault}
             />
           </div>
         </div>

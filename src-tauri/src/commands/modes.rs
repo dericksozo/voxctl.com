@@ -322,6 +322,11 @@ pub fn delete_mode(app: AppHandle, id: String) {
 
 #[tauri::command]
 pub fn set_mode_enabled(app: AppHandle, id: String, enabled: bool) {
+    // The default mode is the priority-3 fallback; it must always stay enabled so
+    // the user can never disable every mode and lock themselves out.
+    if !enabled && read_store_string(&app, DEFAULT_KEY).as_deref() == Some(id.as_str()) {
+        return;
+    }
     let mut modes = load(&app);
     if let Some(m) = modes.iter_mut().find(|m| m.id == id) {
         m.enabled = enabled;
