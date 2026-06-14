@@ -36,6 +36,11 @@ const MANUAL_COMMIT_RMS_THRESHOLD: f32 = 0.01;
 const FINAL_GRACE: Duration = Duration::from_secs(2);
 const READ_TIMEOUT: Duration = Duration::from_secs(45);
 
+/// Persists the best-available transcript mid-session (called whenever a segment
+/// finalizes) so a crash *before* stop still leaves recoverable text on the
+/// history row. Boxed to keep the live modules decoupled from history/AppHandle.
+pub type TranscriptSink = Box<dyn Fn(&str) + Send + Sync>;
+
 /// Namespace for the OpenAI realtime live-transcription session opener. Saved
 /// recordings are re-transcribed via the REST file transcribers (`file_transcribe`),
 /// not this realtime path.
@@ -45,11 +50,16 @@ impl OpenAiRealtimeTranscriber {
     /// Open a live transcription session: connect the WebSocket and start a
     /// background task that streams audio in as it's captured and finalizes on
     /// stop. Audio is pushed via the returned [`RealtimeSession`]; the final
-    /// transcript is awaited with [`RealtimeSession::finish`].
-    pub fn open_session(api_key: String, language: Option<String>) -> RealtimeSession {
+    /// transcript is awaited with [`RealtimeSession::finish`]. `sink`, when set,
+    /// persists partial transcripts mid-capture for crash recovery.
+    pub fn open_session(
+        api_key: String,
+        language: Option<String>,
+        sink: Option<TranscriptSink>,
+    ) -> RealtimeSession {
         let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Vec<i16>>();
         let (done_tx, done_rx) = oneshot::channel::<Result<TranscriptOutput, String>>();
-        tauri::async_runtime::spawn(session_task(api_key, language, audio_rx, done_tx));
+        tauri::async_runtime::spawn(session_task(api_key, language, audio_rx, done_tx, sink));
         RealtimeSession { audio_tx, done_rx }
     }
 }
@@ -97,9 +107,10 @@ async fn session_task(
     language: Option<String>,
     mut audio_rx: mpsc::UnboundedReceiver<Vec<i16>>,
     done_tx: oneshot::Sender<Result<TranscriptOutput, String>>,
+    sink: Option<TranscriptSink>,
 ) {
     // gpt-realtime-whisper streams plain text only — no word/speaker metadata.
-    let result = run_session(&api_key, language, &mut audio_rx)
+    let result = run_session(&api_key, language, &mut audio_rx, sink)
         .await
         .map(TranscriptOutput::text_only);
     let _ = done_tx.send(result);
@@ -300,10 +311,32 @@ fn is_empty_commit_error(msg: &str) -> bool {
     msg.contains("commit") && (msg.contains("empty") || msg.contains("no audio"))
 }
 
+/// Close the socket and prefer the best-available transcript over a hard error:
+/// a mid-session WebSocket failure (e.g. Wi-Fi drop) should still deliver the
+/// text produced so far rather than losing the whole utterance.
+async fn best_available_on_close<S>(
+    write: &mut S,
+    text: String,
+    err: String,
+) -> Result<String, String>
+where
+    S: SinkExt<Message> + Unpin,
+    <S as futures_util::Sink<Message>>::Error: std::fmt::Display,
+{
+    let _ = write.send(Message::Close(None)).await;
+    if text.is_empty() {
+        Err(err)
+    } else {
+        log::info!("openai realtime: ws failure, using best-available transcript: {err}");
+        Ok(text)
+    }
+}
+
 async fn run_session(
     api_key: &str,
     language: Option<String>,
     audio_rx: &mut mpsc::UnboundedReceiver<Vec<i16>>,
+    sink: Option<TranscriptSink>,
 ) -> Result<String, String> {
     let mut req = WS_URL
         .into_client_request()
@@ -342,10 +375,12 @@ async fn run_session(
                     Some(chunk) if !chunk.is_empty() => {
                         let msg = json!({ "type": "input_audio_buffer.append", "audio": pcm16_to_base64(&chunk) });
                         if let Err(e) = write.send(Message::Text(msg.to_string())).await {
-                            return Err(format!("send audio: {e}"));
+                            return best_available_on_close(&mut write, transcript.text(), format!("send audio: {e}")).await;
                         }
                         if commit_detector.observe(&chunk) {
-                            send_commit(&mut write, "silence commit").await?;
+                            if let Err(e) = send_commit(&mut write, "silence commit").await {
+                                return best_available_on_close(&mut write, transcript.text(), e).await;
+                            }
                             pending_commits += 1;
                             commit_detector.reset();
                         }
@@ -353,7 +388,9 @@ async fn run_session(
                     Some(_) => {}
                     None => {
                         if commit_detector.should_commit_final() {
-                            send_commit(&mut write, "final commit").await?;
+                            if let Err(e) = send_commit(&mut write, "final commit").await {
+                                return best_available_on_close(&mut write, transcript.text(), e).await;
+                            }
                             pending_commits += 1;
                             awaiting_final_commit = true;
                             commit_detector.reset();
@@ -363,11 +400,17 @@ async fn run_session(
                 }
             }
             frame = read.next() => {
-                match handle_frame(frame, &mut transcript)? {
-                    FrameSignal::Committed => {}
-                    FrameSignal::Completed => pending_commits = pending_commits.saturating_sub(1),
-                    FrameSignal::Closed => break,
-                    FrameSignal::Continue => {}
+                match handle_frame(frame, &mut transcript) {
+                    Ok(FrameSignal::Committed) => {}
+                    Ok(FrameSignal::Completed) => {
+                        pending_commits = pending_commits.saturating_sub(1);
+                        if let Some(s) = sink.as_ref() { s(&transcript.text()); }
+                    }
+                    Ok(FrameSignal::Closed) => break,
+                    Ok(FrameSignal::Continue) => {}
+                    Err(e) => {
+                        return best_available_on_close(&mut write, transcript.text(), e).await;
+                    }
                 }
             }
         }
@@ -382,7 +425,12 @@ async fn run_session(
                 Ok(FrameSignal::Committed) => {
                     awaiting_final_commit = false;
                 }
-                Ok(FrameSignal::Completed) => pending_commits = pending_commits.saturating_sub(1),
+                Ok(FrameSignal::Completed) => {
+                    pending_commits = pending_commits.saturating_sub(1);
+                    if let Some(s) = sink.as_ref() {
+                        s(&transcript.text());
+                    }
+                }
                 Ok(FrameSignal::Closed) => break,
                 Ok(FrameSignal::Continue) => {}
                 Err(e) if awaiting_final_commit && is_empty_commit_error(&e) => {
@@ -410,7 +458,10 @@ async fn run_session(
                                 awaiting_final_commit = false;
                             }
                             Ok(FrameSignal::Completed) => {
-                                pending_commits = pending_commits.saturating_sub(1)
+                                pending_commits = pending_commits.saturating_sub(1);
+                                if let Some(s) = sink.as_ref() {
+                                    s(&transcript.text());
+                                }
                             }
                             Ok(FrameSignal::Closed) => break,
                             Ok(FrameSignal::Continue) => {}
@@ -436,7 +487,20 @@ async fn run_session(
     };
 
     let _ = write.send(Message::Close(None)).await;
-    result
+    // A WebSocket failure while finalizing (e.g. Wi-Fi drop) shouldn't discard a
+    // transcript we already produced; fall back to the best-available text.
+    match result {
+        Ok(t) => Ok(t),
+        Err(e) => {
+            let t = transcript.text();
+            if t.is_empty() {
+                Err(e)
+            } else {
+                log::info!("openai realtime: finalize error, using best-available transcript: {e}");
+                Ok(t)
+            }
+        }
+    }
 }
 
 async fn send_commit<S>(write: &mut S, label: &str) -> Result<(), String>

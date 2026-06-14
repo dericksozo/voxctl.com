@@ -3,6 +3,7 @@ import "./styles/theme.css";
 import { Frame, Logo, Qr } from "./components/Primitives";
 import { Clock } from "./components/Clock";
 import { VolumeMeter } from "./components/VolumeMeter";
+import { RecTimer } from "./components/RecTimer";
 import { Typewriter } from "./components/Typewriter";
 import { DEFAULT_THEME, type Theme, TweaksPanel } from "./components/TweaksPanel";
 import { ModeSwitcher } from "./components/ModeSwitcher";
@@ -421,6 +422,7 @@ export default function App() {
           <span className="gr-k">{t("footer.input")}</span>
           <VolumeMeter count={12} />
         </div>
+        <RecTimer />
         <div className="gr gr-clock">
           <span className="gr-k">{t("footer.utc")}</span>
           <Clock />

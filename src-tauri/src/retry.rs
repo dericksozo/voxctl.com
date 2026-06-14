@@ -45,7 +45,15 @@ pub fn spawn(app: AppHandle) {
         "recording",
     ));
     for item in &interrupted {
-        history::set_status(&app.state::<HistoryDb>(), item.id, "failed");
+        // A live capture that crashed mid-recording may have persisted a partial
+        // transcript (Path A). That text is the deliverable, so keep it as `done`
+        // rather than discarding it into the file-retry path; only empty rows fail.
+        let status = if item.transcript.trim().is_empty() {
+            "failed"
+        } else {
+            "done"
+        };
+        history::set_status(&app.state::<HistoryDb>(), item.id, status);
     }
     let audio_changed = history::reconcile_audio_status(&app);
     if !interrupted.is_empty() || audio_changed {

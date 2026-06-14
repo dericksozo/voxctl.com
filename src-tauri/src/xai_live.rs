@@ -24,7 +24,7 @@ use tokio_tungstenite::{
 };
 
 use crate::file_transcribe::{self, SpeakerSeg, TranscribeOptions, TranscriptOutput, WordStamp};
-use crate::transcription::RealtimeSession;
+use crate::transcription::{RealtimeSession, TranscriptSink};
 
 const BASE: &str = "wss://api.x.ai/v1/stt";
 /// Matches the capture forwarder's output rate (resample::TARGET_RATE).
@@ -33,12 +33,17 @@ const FINAL_GRACE: Duration = Duration::from_secs(2);
 const READ_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Open a live xAI transcription session. Audio is pushed via the returned
-/// session's `sender()`; the final transcript is awaited with `finish()`.
-pub fn open_session(key: String, opts: TranscribeOptions) -> RealtimeSession {
+/// session's `sender()`; the final transcript is awaited with `finish()`. `sink`,
+/// when set, persists partial transcripts mid-capture for crash recovery.
+pub fn open_session(
+    key: String,
+    opts: TranscribeOptions,
+    sink: Option<TranscriptSink>,
+) -> RealtimeSession {
     let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Vec<i16>>();
     let (done_tx, done_rx) = oneshot::channel::<Result<TranscriptOutput, String>>();
     tauri::async_runtime::spawn(async move {
-        let result = run_session(&key, &opts, audio_rx).await;
+        let result = run_session(&key, &opts, audio_rx, sink).await;
         let _ = done_tx.send(result);
     });
     RealtimeSession::from_parts(audio_tx, done_rx)
@@ -187,6 +192,7 @@ enum Flow {
 fn handle_frame(
     frame: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>,
     acc: &mut Accumulator,
+    sink: Option<&TranscriptSink>,
     debug: bool,
 ) -> Result<Flow, String> {
     let msg = match frame {
@@ -218,12 +224,18 @@ fn handle_frame(
                 .unwrap_or(false);
             if acc.observe(text, speech_final) {
                 acc.capture_structured(&v);
+                if let Some(s) = sink {
+                    s(&acc.joined());
+                }
             }
             Ok(Flow::Continue)
         }
         "transcript.done" => {
             let text = v.get("text").and_then(Value::as_str).unwrap_or("");
             acc.done(&v, text);
+            if let Some(s) = sink {
+                s(&acc.joined());
+            }
             Ok(Flow::Done)
         }
         "error" => {
@@ -237,10 +249,32 @@ fn handle_frame(
     }
 }
 
+/// Close the socket and prefer the best-available transcript over a hard error,
+/// so a mid-session WebSocket failure (e.g. Wi-Fi drop) still delivers the text
+/// produced so far rather than losing the utterance.
+async fn best_available_on_close<S>(
+    write: &mut S,
+    out: TranscriptOutput,
+    err: String,
+) -> Result<TranscriptOutput, String>
+where
+    S: SinkExt<Message> + Unpin,
+    <S as futures_util::Sink<Message>>::Error: std::fmt::Display,
+{
+    let _ = write.send(Message::Close(None)).await;
+    if out.text.is_empty() {
+        Err(err)
+    } else {
+        log::info!("xai live: ws failure, using best-available transcript: {err}");
+        Ok(out)
+    }
+}
+
 async fn run_session(
     key: &str,
     opts: &TranscribeOptions,
     mut audio_rx: mpsc::UnboundedReceiver<Vec<i16>>,
+    sink: Option<TranscriptSink>,
 ) -> Result<TranscriptOutput, String> {
     let mut req = build_url(opts)
         .into_client_request()
@@ -267,27 +301,32 @@ async fn run_session(
             maybe = audio_rx.recv() => match maybe {
                 Some(chunk) if !chunk.is_empty() => {
                     if let Err(e) = write.send(Message::Binary(pcm16_le(&chunk))).await {
-                        return Err(format!("xai send audio: {e}"));
+                        return best_available_on_close(&mut write, acc.final_output(), format!("xai send audio: {e}")).await;
                     }
                 }
                 Some(_) => {}
                 None => {
                     // Capture ended → signal end of audio, then drain.
-                    write
+                    if let Err(e) = write
                         .send(Message::Text(json!({ "type": "audio.done" }).to_string()))
                         .await
-                        .map_err(|e| format!("xai send audio.done: {e}"))?;
+                    {
+                        return best_available_on_close(&mut write, acc.final_output(), format!("xai send audio.done: {e}")).await;
+                    }
                     break;
                 }
             },
             frame = read.next() => {
-                match handle_frame(frame, &mut acc, ws_debug)? {
-                    Flow::Done => {
+                match handle_frame(frame, &mut acc, sink.as_ref(), ws_debug) {
+                    Ok(Flow::Done) => {
                         let _ = write.send(Message::Close(None)).await;
                         return Ok(acc.final_output());
                     }
-                    Flow::Closed => return Ok(acc.final_output()),
-                    Flow::Continue => {}
+                    Ok(Flow::Closed) => return Ok(acc.final_output()),
+                    Ok(Flow::Continue) => {}
+                    Err(e) => {
+                        return best_available_on_close(&mut write, acc.final_output(), e).await;
+                    }
                 }
             }
         }
@@ -298,7 +337,7 @@ async fn run_session(
     // after a short grace period over keeping the user in "processing".
     let grace = async {
         loop {
-            match handle_frame(read.next().await, &mut acc, ws_debug)? {
+            match handle_frame(read.next().await, &mut acc, sink.as_ref(), ws_debug)? {
                 Flow::Done | Flow::Closed => {
                     return Ok::<TranscriptOutput, String>(acc.final_output())
                 }
@@ -316,7 +355,7 @@ async fn run_session(
             } else {
                 let drain = async {
                     loop {
-                        match handle_frame(read.next().await, &mut acc, ws_debug)? {
+                        match handle_frame(read.next().await, &mut acc, sink.as_ref(), ws_debug)? {
                             Flow::Done | Flow::Closed => {
                                 return Ok::<TranscriptOutput, String>(acc.final_output())
                             }
@@ -336,7 +375,20 @@ async fn run_session(
         }
     };
     let _ = write.send(Message::Close(None)).await;
-    result
+    // A WebSocket failure while finalizing shouldn't discard a transcript we
+    // already produced; fall back to the best-available text.
+    match result {
+        Ok(out) => Ok(out),
+        Err(e) => {
+            let out = acc.final_output();
+            if out.text.is_empty() {
+                Err(e)
+            } else {
+                log::info!("xai live: finalize error, using best-available transcript: {e}");
+                Ok(out)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -459,7 +511,7 @@ mod tests {
             word_timestamps: true,
             ..Default::default()
         };
-        let result = rt.block_on(run_session(&key, &opts, rx));
+        let result = rt.block_on(run_session(&key, &opts, rx, None));
         eprintln!("FINAL: {result:?}");
         assert!(result.is_ok(), "xai live failed: {result:?}");
         let out = result.unwrap();

@@ -338,7 +338,7 @@ pub fn reserve_recording(
     app_name: Option<&str>,
     website: Option<&str>,
     model_id: &str,
-) -> Result<(i64, String), String> {
+) -> Result<(i64, String, i64), String> {
     let created_at = now_millis();
     let path = next_recording_path(app, created_at);
     let path_str = path.to_string_lossy().to_string();
@@ -361,7 +361,7 @@ pub fn reserve_recording(
         "capturing",
     )
     .map_err(|e| format!("reserve recording: {e}"))?;
-    Ok((id, path_str))
+    Ok((id, path_str, created_at))
 }
 
 pub fn mark_stopped(db: &HistoryDb, id: i64, duration_secs: f64, status: &str, audio_status: &str) {
@@ -411,6 +411,18 @@ pub fn update_result_and_model(
     let _ = conn.execute(
         "UPDATE recordings SET transcript = ?2, language = ?3, words = ?4, status = ?5, transcription_ms = ?6, extra_json = ?7, model_id = ?8 WHERE id = ?1",
         params![id, transcript, language, words, status, transcription_ms, extra_json, model_id],
+    );
+}
+
+/// Persist the best-available live transcript mid-capture without touching
+/// `status` (the row stays `recording`/`transcribing`), so a crash before stop
+/// leaves recoverable text. Called at stable points by the live transcript sink.
+pub fn update_partial_transcript(db: &HistoryDb, id: i64, transcript: &str) {
+    let conn = db.0.lock().unwrap();
+    let words = transcript.split_whitespace().count() as i64;
+    let _ = conn.execute(
+        "UPDATE recordings SET transcript = ?2, words = ?3 WHERE id = ?1",
+        params![id, transcript, words],
     );
 }
 
@@ -470,12 +482,49 @@ pub fn reconcile_audio_status(app: &AppHandle) -> bool {
         if path.exists() {
             let bytes = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0);
             changed |= update_audio_result(&db, item.id, bytes, "ready");
+        } else if let Some((bytes, secs)) = recover_pcm_sidecar(&item.audio_path) {
+            // A file-mode capture crashed mid-recording (Path B): the raw PCM16
+            // sidecar survived. We wrapped it into a playable WAV; surface it for
+            // a MANUAL re-run (needs_transcription — deliberately not auto-retried).
+            recover_partial_recording(&db, item.id, bytes, secs);
+            changed = true;
         } else {
             set_audio_status(&db, item.id, "failed");
             changed = true;
         }
     }
     changed
+}
+
+/// If a raw PCM16 sidecar (`{audio_path}.pcm`, written during file-mode capture
+/// for crash recovery) exists, wrap it into a playable WAV at `audio_path` and
+/// delete the sidecar. The sidecar is headerless mono 24 kHz PCM16, so building a
+/// valid WAV from it is deterministic. Returns (wav byte length, duration secs).
+fn recover_pcm_sidecar(audio_path: &str) -> Option<(i64, f64)> {
+    let sidecar = format!("{audio_path}.pcm");
+    let raw = std::fs::read(&sidecar).ok()?;
+    if raw.len() < 2 {
+        return None;
+    }
+    let pcm16: Vec<i16> = raw
+        .chunks_exact(2)
+        .map(|c| i16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    let wav = encode_wav(&pcm16, crate::resample::TARGET_RATE).ok()?;
+    std::fs::write(audio_path, &wav).ok()?;
+    let _ = std::fs::remove_file(&sidecar);
+    let secs = pcm16.len() as f64 / crate::resample::TARGET_RATE as f64;
+    Some((wav.len() as i64, secs))
+}
+
+/// Mark a recording recovered from its PCM sidecar: audio is ready on disk, but
+/// no transcript was produced, so it awaits a manual re-run by mode.
+fn recover_partial_recording(db: &HistoryDb, id: i64, audio_bytes: i64, duration_secs: f64) {
+    let conn = db.0.lock().unwrap();
+    let _ = conn.execute(
+        "UPDATE recordings SET audio_bytes = ?2, duration_secs = ?3, audio_status = 'ready', status = 'needs_transcription' WHERE id = ?1",
+        params![id, audio_bytes, duration_secs],
+    );
 }
 
 /// Rows currently in a given status (used by the retry worker).
@@ -880,5 +929,71 @@ mod tests {
         let removed = purge_older_than(&db, 7, true);
         assert_eq!(removed, vec!["/tmp/old.wav".to_string()]);
         assert_eq!(list(&db).len(), 2); // favorite + recent remain
+    }
+
+    #[test]
+    fn update_partial_transcript_keeps_status() {
+        // The live sink persists partial text mid-capture without disturbing the
+        // recording lifecycle (status stays "recording" until stop/recovery).
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        let id = insert_row(
+            &conn,
+            1000,
+            "",
+            "auto",
+            "Default",
+            None,
+            None,
+            0.0,
+            0,
+            "/tmp/p.wav",
+            "recording",
+            "gpt-realtime-whisper",
+            0,
+            "capturing",
+        )
+        .unwrap();
+        let db = HistoryDb(Mutex::new(conn));
+        update_partial_transcript(&db, id, "hello there friend");
+        let item = get(&db, id).unwrap();
+        assert_eq!(item.transcript, "hello there friend");
+        assert_eq!(item.words, 3);
+        assert_eq!(item.status, "recording");
+        assert_eq!(item.audio_status, "capturing");
+    }
+
+    #[test]
+    fn recover_pcm_sidecar_wraps_into_wav() {
+        let dir = std::env::temp_dir();
+        let wav = dir
+            .join(format!("voxctl-test-rec-{}.wav", now_millis()))
+            .to_string_lossy()
+            .to_string();
+        let sidecar = format!("{wav}.pcm");
+        let samples: Vec<i16> = (0..2400).map(|i| (i % 256 - 128) as i16 * 50).collect();
+        let mut raw = Vec::with_capacity(samples.len() * 2);
+        for s in &samples {
+            raw.extend_from_slice(&s.to_le_bytes());
+        }
+        std::fs::write(&sidecar, &raw).unwrap();
+
+        let (bytes, secs) = recover_pcm_sidecar(&wav).expect("recovers from sidecar");
+        assert!(Path::new(&wav).exists());
+        assert!(!Path::new(&sidecar).exists(), "sidecar consumed");
+        assert_eq!(read_wav(&wav).unwrap(), samples);
+        assert_eq!(bytes as u64, std::fs::metadata(&wav).unwrap().len());
+        assert!((secs - 2400.0 / crate::resample::TARGET_RATE as f64).abs() < 1e-9);
+        let _ = std::fs::remove_file(&wav);
+    }
+
+    #[test]
+    fn recover_pcm_sidecar_absent_is_none() {
+        let dir = std::env::temp_dir();
+        let wav = dir
+            .join(format!("voxctl-test-missing-{}.wav", now_millis()))
+            .to_string_lossy()
+            .to_string();
+        assert!(recover_pcm_sidecar(&wav).is_none());
     }
 }
