@@ -63,6 +63,19 @@ const timeLabel = (ts: number) => {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 const durLabel = (s: number) => `${Math.floor(s / 60)}:${pad(Math.round(s % 60))}`;
+/** Live elapsed for the in-flight recording card. Self-contained leaf: owns its
+ *  own 1s interval and counts from the row's createdAt, so it survives panel
+ *  remounts and never re-renders the rest of the list. */
+function CardRecTimer({ createdAt }: { createdAt: number }) {
+  const [secs, setSecs] = useState(() => Math.max(0, (Date.now() - createdAt) / 1000));
+  useEffect(() => {
+    const tick = () => setSecs(Math.max(0, (Date.now() - createdAt) / 1000));
+    tick();
+    const iv = setInterval(tick, 1000);
+    return () => clearInterval(iv);
+  }, [createdAt]);
+  return <span className="hm-status busy">{durLabel(secs)}</span>;
+}
 /** How long the transcription took (ms → "x.xs"), or "" when not measured. */
 const tookLabel = (ms: number) => (ms > 0 ? `${(ms / 1000).toFixed(1)}s` : "");
 /** A word/segment start time as mm:ss.s. */
@@ -858,6 +871,9 @@ export function HistoryPanel({
                         )}
                       </div>
                       <div className="hm-head-right">
+                        {item.status === "recording" ? (
+                          <CardRecTimer createdAt={item.createdAt} />
+                        ) : null}
                         {sc ? <span className={"hm-status " + sc.cls}>{sc.label}</span> : null}
                         {!exp ? (
                           <div

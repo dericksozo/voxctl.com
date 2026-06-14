@@ -25,6 +25,8 @@ export interface MicLevel {
 export interface RecState {
   recording: boolean;
   language: string | null;
+  /** Unix ms the recording started (= history row createdAt). Present on start. */
+  startedAt?: number;
 }
 export interface ModeChanged {
   id: string;
