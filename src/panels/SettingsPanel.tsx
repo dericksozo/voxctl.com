@@ -7,8 +7,8 @@ import { ShortcutRecorder } from "../components/ShortcutRecorder";
 import { useConfig } from "../hooks/useConfig";
 import { t } from "../i18n";
 import { AVAILABLE_LOCALES } from "../i18n";
-import { purgeRecordings, requestNotificationPermission, storageStats } from "../lib/ipc";
-import type { CaptureMode, DeleteBehavior, StorageStats } from "../lib/types";
+import { requestNotificationPermission, storageStats } from "../lib/ipc";
+import type { AutoDeletePolicy, CaptureMode, StorageStats } from "../lib/types";
 import {
   providerValidated,
   type ProviderStatus,
@@ -212,8 +212,8 @@ export function SettingsPanel({
       <section className="set-section" data-sec="storage">
         <SectionHead id="storage" />
         <StorageSection
-          deleteBehavior={config.deleteBehavior}
-          onDeleteBehavior={(v) => set("deleteBehavior", v)}
+          policy={config.autoDeletePolicy}
+          onPolicy={(v) => set("autoDeletePolicy", v)}
           recording={recording}
         />
       </section>
@@ -260,38 +260,28 @@ export function SettingsPanel({
 
 const fmtMB = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 
-/** Storage: disk used, delete-behavior, and a retention purge (Storage section). */
+const AUTO_DELETE_OPTIONS: { value: AutoDeletePolicy; label: string }[] = [
+  { value: "never", label: "settings.autoDeleteNever" },
+  { value: "keep_latest_5", label: "settings.autoDeleteKeep5" },
+  { value: "after_3_days", label: "settings.autoDelete3d" },
+  { value: "after_2_weeks", label: "settings.autoDelete2w" },
+  { value: "after_3_months", label: "settings.autoDelete3m" },
+];
+
+/** Storage: disk used + the auto-delete retention policy (Storage section). */
 function StorageSection({
-  deleteBehavior,
-  onDeleteBehavior,
+  policy,
+  onPolicy,
   recording,
 }: {
-  deleteBehavior: DeleteBehavior;
-  onDeleteBehavior: (v: DeleteBehavior) => void;
+  policy: AutoDeletePolicy;
+  onPolicy: (v: AutoDeletePolicy) => void;
   recording: boolean;
 }) {
   const [stats, setStats] = useState<StorageStats | null>(null);
-  const [days, setDays] = useState(30);
-  const [keepFav, setKeepFav] = useState(true);
-  const [purging, setPurging] = useState(false);
-
-  const refresh = () => storageStats().then(setStats).catch(() => {});
   useEffect(() => {
-    refresh();
+    storageStats().then(setStats).catch(() => {});
   }, []);
-
-  async function purge() {
-    if (recording) return;
-    setPurging(true);
-    try {
-      await purgeRecordings(days, keepFav);
-      refresh();
-    } catch (e) {
-      console.error("purge failed", e);
-    } finally {
-      setPurging(false);
-    }
-  }
 
   return (
     <>
@@ -309,52 +299,22 @@ function StorageSection({
       </div>
 
       <div className="vx-set-field">
-        <div className="vx-set-card">
-          <div className="vx-set-row">
-            <div className="vx-set-card-text">
-              <div className="vx-set-card-label">{t("settings.deleteBehavior")}</div>
-            </div>
-            <Segmented<DeleteBehavior>
-              value={deleteBehavior}
-              options={[
-                { value: "both", label: t("settings.deleteBoth") },
-                { value: "transcript", label: t("settings.deleteKeepAudio") },
-              ]}
-              onChange={onDeleteBehavior}
-              disabled={recording}
-            />
-          </div>
-        </div>
-        <p className="vx-set-field-desc">{t("settings.deleteBehaviorSub")}</p>
-      </div>
-
-      <div className="vx-set-card vx-set-card--stack">
-        <div className="storage-purge">
-          <span className="set-sub">{t("settings.purgeOlder")}</span>
-          <input
-            className="storage-days"
-            type="number"
-            min={1}
-            value={days}
+        <div className="vx-set-card vx-set-card--stack">
+          <div className="vx-set-card-label">{t("settings.autoDelete")}</div>
+          <select
+            className="set-select"
+            value={policy}
+            onChange={(e) => onPolicy(e.target.value as AutoDeletePolicy)}
             disabled={recording}
-            onChange={(e) => setDays(Math.max(1, Number(e.target.value) || 1))}
-          />
-          <span className="set-sub">{t("settings.purgeDays")}</span>
-          <Toggle
-            on={keepFav}
-            onToggle={() => setKeepFav((v) => !v)}
-            labels={[t("settings.purgeKeepFav"), t("settings.purgeAll")]}
-            disabled={recording}
-          />
-          <button
-            type="button"
-            className="vx-btn vx-btn--danger"
-            onClick={purge}
-            disabled={purging || recording}
           >
-            {purging ? t("settings.purging") : t("settings.purge")}
-          </button>
+            {AUTO_DELETE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {t(o.label)}
+              </option>
+            ))}
+          </select>
         </div>
+        <p className="vx-set-field-desc">{t("settings.autoDeleteSub")}</p>
       </div>
     </>
   );

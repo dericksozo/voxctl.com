@@ -719,36 +719,47 @@ pub fn storage_stats(app: &AppHandle) -> StorageStats {
     }
 }
 
-/// Delete recordings older than `older_than_days` (optionally keeping favorites).
-/// Returns the audio paths of the removed rows so the caller can delete the files
-/// (purge always frees disk, regardless of the delete-behavior setting).
-pub fn purge_older_than(db: &HistoryDb, older_than_days: u32, keep_favorites: bool) -> Vec<String> {
-    let cutoff = now_millis() - (older_than_days as i64) * 86_400_000;
-    let conn = db.0.lock().unwrap();
-    let (select_sql, delete_sql) = if keep_favorites {
-        (
-            "SELECT audio_path FROM recordings WHERE created_at < ?1 AND favorite = 0",
-            "DELETE FROM recordings WHERE created_at < ?1 AND favorite = 0",
-        )
-    } else {
-        (
-            "SELECT audio_path FROM recordings WHERE created_at < ?1",
-            "DELETE FROM recordings WHERE created_at < ?1",
-        )
+/// Enforce the auto-delete retention `policy`, returning the audio paths of the
+/// removed rows so the caller can delete the files. Only terminal rows
+/// (`done`/`failed`) are eligible, so a row still `recording`/`transcribing` is
+/// never swept out from under the pipeline. `"never"` and unknown policies are
+/// no-ops. Time policies delete rows older than a fixed age; `keep_latest_5`
+/// keeps the 5 most recent recordings and drops the rest.
+pub fn enforce_retention(db: &HistoryDb, policy: &str) -> Vec<String> {
+    // Eligible-row predicate. The cutoff/limit is interpolated from a trusted
+    // i64 or a constant — no user input reaches the SQL string.
+    let predicate = match policy {
+        "after_3_days" => time_predicate(3),
+        "after_2_weeks" => time_predicate(14),
+        "after_3_months" => time_predicate(90),
+        "keep_latest_5" => "status IN ('done','failed') AND id NOT IN \
+             (SELECT id FROM recordings ORDER BY created_at DESC LIMIT 5)"
+            .to_string(),
+        _ => return Vec::new(),
     };
+    let conn = db.0.lock().unwrap();
     let paths: Vec<String> = {
-        let mut stmt = match conn.prepare(select_sql) {
+        let mut stmt = match conn.prepare(&format!(
+            "SELECT audio_path FROM recordings WHERE {predicate}"
+        )) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
-        let rows = stmt.query_map(params![cutoff], |r| r.get::<_, String>(0));
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0));
         match rows {
             Ok(it) => it.filter_map(Result::ok).collect(),
             Err(_) => Vec::new(),
         }
     };
-    let _ = conn.execute(delete_sql, params![cutoff]);
+    let _ = conn.execute(&format!("DELETE FROM recordings WHERE {predicate}"), []);
     paths
+}
+
+/// SQL predicate for a time-based retention policy: terminal rows older than
+/// `days` from now.
+fn time_predicate(days: i64) -> String {
+    let cutoff = now_millis() - days * 86_400_000;
+    format!("status IN ('done','failed') AND created_at < {cutoff}")
 }
 
 #[cfg(test)]
@@ -902,33 +913,55 @@ mod tests {
         assert_eq!(list_by_status(&db, "failed").len(), 1);
     }
 
+    fn mk_row(conn: &Connection, at: i64, path: &str, status: &str) -> i64 {
+        insert_row(
+            conn, at, "t", "en", "M", None, None, 1.0, 1, path, status, "m", 100, "ready",
+        )
+        .unwrap()
+    }
+
     #[test]
-    fn purge_older_than_respects_favorites() {
+    fn enforce_retention_time_based_drops_old_terminal_rows() {
         let conn = Connection::open_in_memory().unwrap();
         create_schema(&conn).unwrap();
         let day = 86_400_000i64;
         let old = now_millis() - 10 * day;
         let recent = now_millis() - day;
-        // old + not favorite -> purged; old + favorite -> kept when keep_favorites; recent -> kept.
-        let mk = |conn: &Connection, at: i64, fav: i64, path: &str| {
-            let id = insert_row(
-                conn, at, "t", "en", "M", None, None, 1.0, 1, path, "done", "m", 100, "ready",
-            )
-            .unwrap();
-            conn.execute(
-                "UPDATE recordings SET favorite = ?2 WHERE id = ?1",
-                params![id, fav],
-            )
-            .unwrap();
-        };
-        mk(&conn, old, 0, "/tmp/old.wav");
-        mk(&conn, old, 1, "/tmp/oldfav.wav");
-        mk(&conn, recent, 0, "/tmp/recent.wav");
+        mk_row(&conn, old, "/tmp/old.wav", "done");
+        // An old row still in flight must NOT be swept out from under the pipeline.
+        mk_row(&conn, old, "/tmp/old_inflight.wav", "transcribing");
+        mk_row(&conn, recent, "/tmp/recent.wav", "done");
         let db = HistoryDb(Mutex::new(conn));
 
-        let removed = purge_older_than(&db, 7, true);
+        let removed = enforce_retention(&db, "after_3_days");
         assert_eq!(removed, vec!["/tmp/old.wav".to_string()]);
-        assert_eq!(list(&db).len(), 2); // favorite + recent remain
+        assert_eq!(list(&db).len(), 2); // in-flight + recent remain
+    }
+
+    #[test]
+    fn enforce_retention_keep_latest_5_drops_the_rest() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        for i in 0..7i64 {
+            mk_row(&conn, 1000 + i, &format!("/tmp/{i}.wav"), "done");
+        }
+        let db = HistoryDb(Mutex::new(conn));
+
+        let removed = enforce_retention(&db, "keep_latest_5");
+        assert_eq!(removed.len(), 2); // the two oldest go
+        assert_eq!(list(&db).len(), 5);
+    }
+
+    #[test]
+    fn enforce_retention_never_and_unknown_are_noops() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        mk_row(&conn, 1, "/tmp/a.wav", "done");
+        let db = HistoryDb(Mutex::new(conn));
+
+        assert!(enforce_retention(&db, "never").is_empty());
+        assert!(enforce_retention(&db, "bogus").is_empty());
+        assert_eq!(list(&db).len(), 1);
     }
 
     #[test]

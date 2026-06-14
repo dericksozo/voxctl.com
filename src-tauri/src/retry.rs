@@ -60,6 +60,10 @@ pub fn spawn(app: AppHandle) {
         let _ = app.emit(events::HISTORY_CHANGED, ());
     }
 
+    // Sweep recordings that fall outside the auto-delete retention policy. Done
+    // once at startup; the post-recording trigger keeps it current thereafter.
+    crate::commands::history::run_retention(&app);
+
     let notify = app.state::<RetryState>().1.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(FIRST_DELAY).await;

@@ -29,10 +29,11 @@ pub struct Config {
     pub copy_to_clipboard: bool,
     pub notify_on_mode_switch: bool,
     pub app_locale: String,
-    /// What `×` removes from a recording: "both" (row + WAV) or "transcript"
-    /// (row only, keep the WAV on disk). Defaulted for configs saved earlier.
-    #[serde(default = "default_delete_behavior")]
-    pub delete_behavior: String,
+    /// Automatic recording retention. One of: "never", "keep_latest_5",
+    /// "after_3_days", "after_2_weeks", "after_3_months". Both the history row
+    /// and the WAV are removed when a recording falls outside the policy.
+    #[serde(default = "default_auto_delete_policy")]
+    pub auto_delete_policy: String,
     /// First-run onboarding is complete once mic/key/first recording are done.
     #[serde(default)]
     pub onboarding_completed: bool,
@@ -41,8 +42,8 @@ pub struct Config {
     pub accessibility_skipped: bool,
 }
 
-fn default_delete_behavior() -> String {
-    "both".into()
+fn default_auto_delete_policy() -> String {
+    "never".into()
 }
 
 impl Default for Config {
@@ -54,7 +55,7 @@ impl Default for Config {
             copy_to_clipboard: false,
             notify_on_mode_switch: false,
             app_locale: "en".into(),
-            delete_behavior: default_delete_behavior(),
+            auto_delete_policy: default_auto_delete_policy(),
             onboarding_completed: false,
             accessibility_skipped: false,
         }
