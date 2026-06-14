@@ -38,6 +38,12 @@
   line-height: 1;
 }
 
+/* Divider between the default mode (always first) and the add button + custom modes. */
+.vxm-sep {
+  height: 1px;
+  background: var(--line-soft);
+}
+
 /* ---------- mode card ---------- */
 .vxm-card {
   border: 1px solid var(--line-soft);
@@ -101,6 +107,18 @@
 /* compact square delete button */
 .vxm-del {
   padding: 8px 11px;
+}
+/* Inline two-step delete confirmation, shown in place of the ✕ button. */
+.vxm-del-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.vxm-del-q {
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--mag);
 }
 
 /* ---------- rule row (model / trigger / lang / keywords) ---------- */
