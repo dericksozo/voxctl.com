@@ -20,6 +20,8 @@ dist-ssr
 
 # Local-only prompts/planning archive used to build the app — never commit
 prompts/
+notes/
+design/
 
 # Local-only API keys used for manual/live testing — NEVER commit
 API_KEYS_FOR_TESTING.md
