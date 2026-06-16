@@ -40,10 +40,6 @@ export function Hud() {
         (phase === "error" ? " error" : "")
       }
     >
-      <span className="ck tl" />
-      <span className="ck tr" />
-      <span className="ck bl" />
-      <span className="ck br" />
       <Logo recording={phase !== "error"} />
       <HudMeter phase={phase} />
     </div>

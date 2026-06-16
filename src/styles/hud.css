@@ -1,7 +1,5 @@
 /* Recording HUD overlay — transparent borderless window pinned bottom-center.
-   Mirrors the main app's CRT aesthetic: a framed panel with a faint grid and
-   scanlines, corner brackets, the VOXCTL logo (pink chevron blinks), and a
-   square level meter. No text, no language picker. */
+   VOXCTL logo (pink chevron blinks), and a square level meter. */
 :root {
   /* Mirror the main app palette (src/styles/theme.css) so the HUD reads as the
      same product. Magenta accent, refined ink/line scale, JetBrains Mono. */
@@ -49,63 +47,6 @@ body {
   border: 1px solid rgba(128, 128, 140, 0.25);
   border-radius: 10px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22);
-}
-/* faint grid background */
-.hud::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background-image: linear-gradient(var(--line-soft) 1px, transparent 1px),
-    linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
-  background-size: 16px 16px;
-}
-/* scanlines */
-.hud::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  pointer-events: none;
-  background: repeating-linear-gradient(to bottom, rgba(16, 20, 26, 0.05) 0 1px, transparent 1px 3px);
-  mix-blend-mode: multiply;
-}
-.hud > * {
-  position: relative;
-  z-index: 1;
-}
-
-/* corner brackets (ported from the app's .frame) */
-.ck {
-  position: absolute;
-  width: 7px;
-  height: 7px;
-  z-index: 3;
-}
-.ck.tl {
-  top: -1px;
-  left: -1px;
-  border-top: 2px solid var(--ink);
-  border-left: 2px solid var(--ink);
-}
-.ck.tr {
-  top: -1px;
-  right: -1px;
-  border-top: 2px solid var(--ink);
-  border-right: 2px solid var(--ink);
-}
-.ck.bl {
-  bottom: -1px;
-  left: -1px;
-  border-bottom: 2px solid var(--ink);
-  border-left: 2px solid var(--ink);
-}
-.ck.br {
-  bottom: -1px;
-  right: -1px;
-  border-bottom: 2px solid var(--ink);
-  border-right: 2px solid var(--ink);
 }
 
 /* logo — pink chevron blinks while recording */
