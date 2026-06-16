@@ -331,6 +331,11 @@ pub fn set_mode_enabled(app: AppHandle, id: String, enabled: bool) {
     if let Some(m) = modes.iter_mut().find(|m| m.id == id) {
         m.enabled = enabled;
     }
+    // When disabling the currently-pinned mode, clear the pin so resolution
+    // falls through to auto-match / default / first-mode.
+    if !enabled && read_store_string(&app, PINNED_KEY).as_deref() == Some(id.as_str()) {
+        write_store_string(&app, PINNED_KEY, None);
+    }
     persist(&app, &modes);
     recompute_and_emit(&app);
 }
@@ -421,9 +426,9 @@ pub fn resolve_active_mode(
     app_name: Option<&str>,
     host: Option<&str>,
 ) -> Option<(Mode, &'static str)> {
-    // 1. Manual pin (only if it still exists).
+    // 1. Manual pin (only if it still exists and is enabled).
     if let Some(pid) = pinned_id {
-        if let Some(m) = modes.iter().find(|m| m.id == pid) {
+        if let Some(m) = modes.iter().find(|m| m.id == pid && m.enabled) {
             return Some((m.clone(), "pinned"));
         }
     }
@@ -431,14 +436,14 @@ pub fn resolve_active_mode(
     if let Some(m) = match_mode(modes, app_name, host) {
         return Some((m, "auto"));
     }
-    // 3. Explicit default mode.
+    // 3. Explicit default mode (must also be enabled).
     if let Some(did) = default_id {
-        if let Some(m) = modes.iter().find(|m| m.id == did) {
+        if let Some(m) = modes.iter().find(|m| m.id == did && m.enabled) {
             return Some((m.clone(), "default"));
         }
     }
-    // Fallback: the first mode (keeps an active mode before a default is set).
-    modes.first().map(|m| (m.clone(), "default"))
+    // Fallback: the first enabled mode (keeps an active mode before a default is set).
+    modes.iter().find(|m| m.enabled).map(|m| (m.clone(), "default"))
 }
 
 /// Frontmost app/website for auto-matching. None while pinned (irrelevant) or
@@ -889,5 +894,51 @@ mod tests {
             "gemini-2.5-flash"
         );
         assert!(default_model_for_provider(&reg, "anthropic").is_err());
+    }
+
+    #[test]
+    fn disabled_pinned_mode_falls_through_to_auto() {
+        let modes = fixture();
+        // Pin "slackoff" (which is disabled) — auto-match should beat it.
+        let (m, reason) = resolve_active_mode(
+            &modes,
+            Some("slackoff"), // pinned but disabled
+            Some("default"),
+            Some("Code"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(m.id, "code");
+        assert_eq!(reason, "auto");
+    }
+
+    #[test]
+    fn disabled_pinned_mode_falls_through_to_default() {
+        let modes = fixture();
+        // Pin "slackoff" (disabled) with no auto-match — default wins.
+        let (m, reason) = resolve_active_mode(
+            &modes,
+            Some("slackoff"), // pinned but disabled
+            Some("default"),
+            Some("Finder"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(m.id, "default");
+        assert_eq!(reason, "default");
+    }
+
+    #[test]
+    fn fallback_picks_first_enabled_not_first_mode() {
+        // First mode is disabled, second is enabled — fallback should pick the
+        // second (first enabled), not the first overall.
+        let modes = vec![
+            mode("off", &[], &[], false),
+            mode("on", &[], &[], true),
+        ];
+        let (m, reason) =
+            resolve_active_mode(&modes, None, None, Some("Finder"), None).unwrap();
+        assert_eq!(m.id, "on");
+        assert_eq!(reason, "default");
     }
 }
