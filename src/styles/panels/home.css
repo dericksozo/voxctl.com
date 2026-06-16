@@ -66,20 +66,12 @@
 
 /* ---------- toolbar (search + filters) ---------- */
 .hm-toolbar {
-  /* Stay pinned to the top of the scroll container while the list scrolls. The
-     opaque --bg fill (plus vertical padding) occludes cards and day-group
-     headers passing underneath; the negative top margin cancels the padding so
-     the search row keeps its original resting position. */
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  background: var(--bg);
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 12px 0;
-  margin: -12px 0 6px;
+  margin: 0 0 6px;
 }
 .hm-search {
   position: relative;
