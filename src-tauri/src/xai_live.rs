@@ -78,9 +78,10 @@ fn build_url(opts: &TranscribeOptions) -> String {
     if opts.multichannel {
         url.push_str("&multichannel=true");
     }
-    for kw in &opts.keywords {
-        url.push_str(&format!("&keyterm={}", enc(kw)));
+    if !opts.keywords.is_empty() {
+        url.push_str(&format!("&keyterm={}", enc(&opts.keywords.join(" "))));
     }
+    eprintln!("xai ws url: {url}");
     url
 }
 
@@ -409,8 +410,7 @@ mod tests {
         assert!(url.contains("encoding=pcm"));
         assert!(url.contains("language=es"));
         assert!(url.contains("diarize=true"));
-        assert!(url.contains("keyterm=VOXCTL"));
-        assert!(url.contains("keyterm=Tauri"));
+        assert!(url.contains("keyterm=VOXCTL%20Tauri"));
         assert!(!url.contains("multichannel"));
     }
 
