@@ -322,6 +322,11 @@ pub fn delete_mode(app: AppHandle, id: String) {
 
 #[tauri::command]
 pub fn set_mode_enabled(app: AppHandle, id: String, enabled: bool) {
+    // The default mode is the priority-3 fallback; it must always stay enabled so
+    // the user can never disable every mode and lock themselves out.
+    if !enabled && read_store_string(&app, DEFAULT_KEY).as_deref() == Some(id.as_str()) {
+        return;
+    }
     let mut modes = load(&app);
     if let Some(m) = modes.iter_mut().find(|m| m.id == id) {
         m.enabled = enabled;
@@ -553,6 +558,19 @@ pub fn recompute_and_emit(app: &AppHandle) {
 /// switch. Skips recompute while VOXCTL is frontmost (keep the current mode),
 /// unless a mode is pinned (sticky regardless of the frontmost app).
 pub fn refresh_active_mode(app: &AppHandle) {
+    // Lock the active mode while a recording is in flight: a recording started in
+    // one mode must stay in that mode even if the user switches apps/websites
+    // mid-utterance. (Transcription already uses the start-time context; this
+    // keeps the displayed active mode from flipping.) stop() re-syncs afterwards.
+    if app
+        .state::<crate::commands::audio::RecorderState>()
+        .0
+        .lock()
+        .unwrap()
+        .recording
+    {
+        return;
+    }
     if read_store_string(app, PINNED_KEY).is_none() {
         if let Some((_, bundle)) = macos::frontmost_app() {
             if bundle.as_deref() == Some(SELF_BUNDLE) {
@@ -599,7 +617,7 @@ fn any_enabled_website_trigger(modes: &[Mode]) -> bool {
 
 /// Build the recording context (language + model + capability options + which
 /// app/website/mode it belongs to) from the resolved active mode. Language
-/// precedence: HUD override → active mode language → config default → auto.
+/// precedence: HUD override → active mode language → auto.
 pub fn resolve_context(app: &AppHandle, override_lang: Option<String>) -> RecordingContext {
     let modes = load(app);
     let pinned = read_store_string(app, PINNED_KEY);
@@ -624,13 +642,11 @@ pub fn resolve_context(app: &AppHandle, override_lang: Option<String>) -> Record
     );
     let matched = resolved.as_ref().map(|(m, _)| m);
 
-    let language = override_lang
-        .or_else(|| {
-            matched.and_then(|m| {
-                (m.language != "auto" && !m.language.is_empty()).then(|| m.language.clone())
-            })
+    let language = override_lang.or_else(|| {
+        matched.and_then(|m| {
+            (m.language != "auto" && !m.language.is_empty()).then(|| m.language.clone())
         })
-        .or_else(|| load_config(app).default_language);
+    });
 
     let reg = registry::effective(app);
     let model_id = matched.map(|m| m.model.clone()).unwrap_or_else(|| {

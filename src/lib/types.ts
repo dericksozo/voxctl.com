@@ -3,8 +3,14 @@
 import type { Capabilities } from "./registry";
 
 export type CaptureMode = "toggle" | "ptt";
-/** What `×` removes: "both" (entry + audio) or "transcript" (entry, keep WAV). */
-export type DeleteBehavior = "both" | "transcript";
+/** Automatic recording retention. Both the history row and the WAV are removed
+ *  for recordings that fall outside the policy. */
+export type AutoDeletePolicy =
+  | "never"
+  | "keep_latest_5"
+  | "after_3_days"
+  | "after_2_weeks"
+  | "after_3_months";
 
 /** Non-secret settings, persisted via tauri-plugin-store (settings.json).
  *  The OpenAI API key is NOT here — it lives in the macOS Keychain (Rust-only). */
@@ -18,10 +24,8 @@ export interface Config {
   notifyOnModeSwitch: boolean;
   /** UI locale, e.g. "en". */
   appLocale: string;
-  /** Forced transcription language (ISO-639-1) or null = model auto-detect. */
-  defaultLanguage: string | null;
-  /** What `×` removes from a recording. */
-  deleteBehavior: DeleteBehavior;
+  /** Automatic recording-retention policy. */
+  autoDeletePolicy: AutoDeletePolicy;
   /** First-run onboarding is complete once mic/key/first recording are done. */
   onboardingCompleted: boolean;
   /** User skipped the optional Accessibility step during onboarding. */
@@ -35,8 +39,7 @@ export const DEFAULT_CONFIG: Config = {
   copyToClipboard: false,
   notifyOnModeSwitch: false,
   appLocale: "en",
-  defaultLanguage: null,
-  deleteBehavior: "both",
+  autoDeletePolicy: "never",
   onboardingCompleted: false,
   accessibilitySkipped: false,
 };

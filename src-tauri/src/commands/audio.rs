@@ -465,6 +465,10 @@ pub fn stop(app: &AppHandle) -> Result<(), String> {
         },
     );
 
+    // Recording is over (flag cleared above), so the active mode is no longer
+    // locked — re-resolve it to whatever app the user is now in.
+    crate::commands::modes::refresh_active_mode(app);
+
     match cap {
         Some(cap) => {
             // Joining the capture thread drops the audio sender, which closes the

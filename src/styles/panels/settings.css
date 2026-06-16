@@ -223,11 +223,6 @@
   margin-top: 2px;
 }
 
-/* ---- storage purge row sits inside a stacked card ---- */
-.settings .storage-purge {
-  margin-top: 0;
-}
-
 /* ---- recording lockout: dim controls inside the body ---- */
 .settings [data-sec] :disabled {
   cursor: not-allowed;

@@ -13,15 +13,23 @@ export function ModeSwitcher({
   registry,
   providers,
   onChange,
+  recording = false,
 }: {
   modes: Mode[];
   active: ActiveMode | null;
   registry: Registry | null;
   providers: ProviderStatus;
   onChange: () => void;
+  /** While recording, the mode is locked — the switcher is disabled. */
+  recording?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+
+  // Recording locks the active mode — make sure an open menu closes.
+  useEffect(() => {
+    if (recording) setOpen(false);
+  }, [recording]);
 
   useEffect(() => {
     if (!open) return;
@@ -62,6 +70,8 @@ export function ModeSwitcher({
         type="button"
         className={"mode-pill" + (pinned ? " pinned" : "")}
         onClick={() => setOpen((o) => !o)}
+        disabled={recording}
+        title={recording ? t("mode.lockedRecording") : undefined}
       >
         {t("header.activeMode")} <b>▸ {name}</b>
         {reason ? <span className="ms-reason">{t("mode.reason." + reason)}</span> : null}

@@ -84,8 +84,6 @@ export const retranscribe = (id: number, modeId: string) =>
 
 // --- Storage ---
 export const storageStats = () => invoke<StorageStats>("storage_stats");
-export const purgeRecordings = (olderThanDays: number, keepFavorites: boolean) =>
-  invoke<number>("purge_recordings", { olderThanDays, keepFavorites });
 
 // --- Config (also persisted JS-side via the store; this re-reads Rust's view) ---
 export const getConfig = () => invoke<Config>("get_config");

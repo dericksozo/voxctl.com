@@ -80,6 +80,8 @@ export function ModesPanel({
   go: (panel: string) => void;
 }) {
   const [editing, setEditing] = useState<Mode | null>(null);
+  // Inline two-step delete confirm: holds the id of the mode awaiting confirmation.
+  const [confirmDel, setConfirmDel] = useState<string | null>(null);
 
   // A mode is "in use" — and so locked from edit/delete — while it drives the
   // live recording, or while a recording it produced is still transcribing.
@@ -102,6 +104,7 @@ export function ModesPanel({
     }
   }
   async function remove(m: Mode) {
+    setConfirmDel(null);
     try {
       await deleteMode(m.id);
       onChange();
@@ -132,8 +135,119 @@ export function ModesPanel({
     );
   }
 
+  const renderMode = (m: Mode) => {
+    const triggers = [...m.triggerApps, ...m.triggerWebsites];
+    const active = m.id === activeModeId;
+    // Only the default mode is non-deletable; every other mode (incl. shipped
+    // presets) can be removed.
+    const isDefault = m.id === defaultModeId;
+    // Locked from edit/delete while recording with it or transcribing its output.
+    const inUse = isInUse(m);
+    const model = modelById(registry, m.model);
+    const providerLabel =
+      model && registry
+        ? (registry.providers.find((p) => p.id === model.provider)?.label ?? model.provider)
+        : null;
+    return (
+      <div
+        key={m.id}
+        className={"vxm-card" + (active ? " is-active" : "") + (m.enabled ? "" : " is-off")}
+      >
+        <div className="vxm-card-head">
+          <span className="vxm-name">{m.name}</span>
+          {active ? <span className="vxm-active-badge">● {t("modes.active")}</span> : null}
+          {inUse ? <span className="vxm-inuse-badge">{t("modes.inUse")}</span> : null}
+          <div className="vxm-card-actions">
+            <button
+              type="button"
+              className="vx-btn"
+              disabled={inUse}
+              title={inUse ? t("modes.inUseHint") : undefined}
+              onClick={() => setEditing({ ...m })}
+            >
+              {t("modes.edit")}
+            </button>
+            {isDefault ? null : confirmDel === m.id ? (
+              <div className="vxm-del-confirm">
+                <span className="vxm-del-q">{t("modes.delete")} ?</span>
+                <button type="button" className="vx-btn" onClick={() => setConfirmDel(null)}>
+                  {t("modes.cancel")}
+                </button>
+                <button
+                  type="button"
+                  className="vx-btn vx-btn--danger"
+                  onClick={() => remove(m)}
+                >
+                  {t("modes.delete")}
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="vx-btn vx-btn--danger vxm-del"
+                aria-label={t("modes.delete")}
+                disabled={inUse}
+                title={inUse ? t("modes.inUseHint") : undefined}
+                onClick={() => setConfirmDel(m.id)}
+              >
+                ✕
+              </button>
+            )}
+            <Toggle
+              on={m.enabled}
+              onToggle={() => toggle(m)}
+              labels={[t("modes.enabled"), t("modes.disabled")]}
+              disabled={isDefault}
+            />
+          </div>
+        </div>
+        <div className="vxm-rules">
+          <span className="vxm-field">
+            <span className="vxm-field-k">{t("modes.model")}</span>
+            <span className="vxm-model">
+              {model ? (
+                <span className="prov" aria-hidden="true">
+                  <ProviderLogo id={model.provider} size={13} />
+                </span>
+              ) : null}
+              {providerLabel ? `${providerLabel} · ` : ""}
+              {model?.label ?? m.model.toUpperCase()}
+              {model ? (
+                <span className={model.canLive ? "vxm-live" : "vxm-file"}>
+                  {modelBadge(model)}
+                </span>
+              ) : null}
+            </span>
+          </span>
+          <span className="vxm-field">
+            <span className="vxm-field-k">{t("modes.trigger")}</span>
+            <span className={"vxm-field-v" + (triggers.length ? "" : " is-muted")}>
+              {triggers.length ? triggers.join(" · ") : "—"}
+            </span>
+          </span>
+          <span className="vxm-field">
+            <span className="vxm-field-k">{t("modes.lang")}</span>
+            <span className="vxm-field-v">{langLabel(m.language)}</span>
+          </span>
+          {m.keywords.length ? (
+            <span className="vxm-field">
+              <span className="vxm-field-k">{t("modes.keywords")}</span>
+              <span className="vxm-field-v vxm-keywords">{m.keywords.join(", ")}</span>
+            </span>
+          ) : null}
+        </div>
+      </div>
+    );
+  };
+
+  // Hierarchy: default mode first → separator → add button → custom modes.
+  const defaultMode = modes.find((m) => m.id === defaultModeId) ?? null;
+  const customModes = modes.filter((m) => m.id !== defaultModeId);
+
   return (
     <div className="panel-body vxm-list">
+      {defaultMode ? renderMode(defaultMode) : null}
+      <div className="vxm-sep" />
       <button
         type="button"
         className="vxm-define"
@@ -142,95 +256,7 @@ export function ModesPanel({
         <span className="vxm-define-plus">＋</span>
         {t("modes.add")}
       </button>
-      {modes.map((m) => {
-        const triggers = [...m.triggerApps, ...m.triggerWebsites];
-        const active = m.id === activeModeId;
-        // Only the default mode is non-deletable; every other mode (incl. shipped
-        // presets) can be removed.
-        const isDefault = m.id === defaultModeId;
-        // Locked from edit/delete while recording with it or transcribing its output.
-        const inUse = isInUse(m);
-        const model = modelById(registry, m.model);
-        const providerLabel =
-          model && registry
-            ? (registry.providers.find((p) => p.id === model.provider)?.label ?? model.provider)
-            : null;
-        return (
-          <div
-            key={m.id}
-            className={"vxm-card" + (active ? " is-active" : "") + (m.enabled ? "" : " is-off")}
-          >
-            <div className="vxm-card-head">
-              <span className="vxm-name">{m.name}</span>
-              {active ? <span className="vxm-active-badge">● {t("modes.active")}</span> : null}
-              {inUse ? <span className="vxm-inuse-badge">{t("modes.inUse")}</span> : null}
-              <div className="vxm-card-actions">
-                <button
-                  type="button"
-                  className="vx-btn"
-                  disabled={inUse}
-                  title={inUse ? t("modes.inUseHint") : undefined}
-                  onClick={() => setEditing({ ...m })}
-                >
-                  {t("modes.edit")}
-                </button>
-                {isDefault ? null : (
-                  <button
-                    type="button"
-                    className="vx-btn vx-btn--danger vxm-del"
-                    aria-label={t("modes.delete")}
-                    disabled={inUse}
-                    title={inUse ? t("modes.inUseHint") : undefined}
-                    onClick={() => remove(m)}
-                  >
-                    ✕
-                  </button>
-                )}
-                <Toggle
-                  on={m.enabled}
-                  onToggle={() => toggle(m)}
-                  labels={[t("modes.enabled"), t("modes.disabled")]}
-                />
-              </div>
-            </div>
-            <div className="vxm-rules">
-              <span className="vxm-field">
-                <span className="vxm-field-k">{t("modes.model")}</span>
-                <span className="vxm-model">
-                  {model ? (
-                    <span className="prov" aria-hidden="true">
-                      <ProviderLogo id={model.provider} size={13} />
-                    </span>
-                  ) : null}
-                  {providerLabel ? `${providerLabel} · ` : ""}
-                  {model?.label ?? m.model.toUpperCase()}
-                  {model ? (
-                    <span className={model.canLive ? "vxm-live" : "vxm-file"}>
-                      {modelBadge(model)}
-                    </span>
-                  ) : null}
-                </span>
-              </span>
-              <span className="vxm-field">
-                <span className="vxm-field-k">{t("modes.trigger")}</span>
-                <span className={"vxm-field-v" + (triggers.length ? "" : " is-muted")}>
-                  {triggers.length ? triggers.join(" · ") : "—"}
-                </span>
-              </span>
-              <span className="vxm-field">
-                <span className="vxm-field-k">{t("modes.lang")}</span>
-                <span className="vxm-field-v">{langLabel(m.language)}</span>
-              </span>
-              {m.keywords.length ? (
-                <span className="vxm-field">
-                  <span className="vxm-field-k">{t("modes.keywords")}</span>
-                  <span className="vxm-field-v vxm-keywords">{m.keywords.join(", ")}</span>
-                </span>
-              ) : null}
-            </div>
-          </div>
-        );
-      })}
+      {customModes.map(renderMode)}
     </div>
   );
 }

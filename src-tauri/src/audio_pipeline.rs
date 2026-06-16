@@ -179,6 +179,11 @@ fn finalize(
         }
         Err(e) => handle_failure(app, id, ctx, &e),
     }
+
+    // A recording just reached a terminal state — apply the retention policy so
+    // "keep latest 5" / time-based limits trim older recordings right away
+    // rather than waiting for the next startup sweep.
+    crate::commands::history::run_retention(app);
 }
 
 /// Deliver the transcript: copy to clipboard if enabled, paste into the focused

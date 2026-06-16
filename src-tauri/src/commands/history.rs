@@ -23,32 +23,21 @@ pub fn get_history_detail(app: AppHandle, id: i64) -> Option<history::HistoryDet
     history::detail(&app.state::<HistoryDb>(), id)
 }
 
-/// Whether a `×` delete should also remove the WAV (delete-behavior setting).
-fn delete_removes_audio(app: &AppHandle) -> bool {
-    config::load_config(app).delete_behavior != "transcript"
-}
-
 #[tauri::command]
 pub fn delete_recording(app: AppHandle, id: i64) -> Result<(), String> {
-    let remove_audio = delete_removes_audio(&app);
     if let Some(path) = history::delete(&app.state::<HistoryDb>(), id) {
-        if remove_audio {
-            let _ = std::fs::remove_file(path);
-        }
+        let _ = std::fs::remove_file(path);
     }
     let _ = app.emit(events::HISTORY_CHANGED, ());
     Ok(())
 }
 
-/// Bulk delete (selection in the Files panel). Honors the delete-behavior setting.
+/// Bulk delete (selection in the Files panel). Always removes row + WAV.
 #[tauri::command]
 pub fn delete_recordings(app: AppHandle, ids: Vec<i64>) -> Result<(), String> {
-    let remove_audio = delete_removes_audio(&app);
     let paths = history::delete_many(&app.state::<HistoryDb>(), &ids);
-    if remove_audio {
-        for p in paths {
-            let _ = std::fs::remove_file(p);
-        }
+    for p in paths {
+        let _ = std::fs::remove_file(p);
     }
     let _ = app.emit(events::HISTORY_CHANGED, ());
     Ok(())
@@ -60,23 +49,23 @@ pub fn storage_stats(app: AppHandle) -> StorageStats {
     history::storage_stats(&app)
 }
 
-/// Delete recordings older than `older_than_days`, optionally keeping favorites.
-/// Always frees the audio files (this is the purpose of a purge). Returns the
-/// number of recordings removed.
-#[tauri::command]
-pub fn purge_recordings(
-    app: AppHandle,
-    older_than_days: u32,
-    keep_favorites: bool,
-) -> Result<usize, String> {
-    let paths =
-        history::purge_older_than(&app.state::<HistoryDb>(), older_than_days, keep_favorites);
-    let removed = paths.len();
+/// Enforce the user's auto-delete retention policy: drop rows + WAVs for
+/// recordings that fall outside the policy, emitting `history-changed` if any
+/// were removed. A cheap no-op when the policy is "never". Safe to call off the
+/// hot path (app startup, after a recording completes).
+pub fn run_retention(app: &AppHandle) {
+    let policy = config::load_config(app).auto_delete_policy;
+    if policy == "never" {
+        return;
+    }
+    let paths = history::enforce_retention(&app.state::<HistoryDb>(), &policy);
+    if paths.is_empty() {
+        return;
+    }
     for p in paths {
         let _ = std::fs::remove_file(p);
     }
     let _ = app.emit(events::HISTORY_CHANGED, ());
-    Ok(removed)
 }
 
 #[tauri::command]

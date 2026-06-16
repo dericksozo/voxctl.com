@@ -157,7 +157,6 @@ pub fn run() {
             commands::history::toggle_favorite,
             commands::history::increment_copy,
             commands::history::storage_stats,
-            commands::history::purge_recordings,
             commands::transcription::retranscribe,
         ])
         .build(tauri::generate_context!())

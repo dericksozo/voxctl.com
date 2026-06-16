@@ -319,6 +319,7 @@ export default function App() {
               registry={registry}
               providers={providers}
               onChange={refreshModes}
+              recording={recording}
             />
           )}
         </div>
