@@ -40,7 +40,7 @@ export function Hud() {
         (phase === "error" ? " error" : "")
       }
     >
-      <Logo recording={phase !== "error"} />
+      <Logo recording={phase !== "error"} dark />
       <HudMeter phase={phase} />
     </div>
   );
