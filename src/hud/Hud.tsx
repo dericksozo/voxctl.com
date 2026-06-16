@@ -6,14 +6,7 @@ import { EVT, type BackendError, type RecState } from "../lib/events";
 
 type Phase = "listening" | "transcribing" | "error";
 
-/** Minimal recording overlay matching the app's CRT aesthetic: a framed panel
- *  with grid + scanlines + corner brackets, the VOXCTL logo (its pink chevron
- *  blinks — slowly while recording, faster while the transcript is processing),
- *  and a square level meter. No text and no language picker (transcription is
- *  realtime and language-agnostic). Lives in its own borderless, always-on-top,
- *  NEVER-focused window so it floats over the focused app without stealing key
- *  focus (critical for text injection). The transcript is injected into the
- *  focused field — intentionally NOT shown here. */
+/** Recording overlay floating above the focused app. Logo blinks while active. */
 export function Hud() {
   const [phase, setPhase] = useState<Phase>("listening");
 
@@ -22,7 +15,6 @@ export function Hud() {
     unsubs.push(
       listen<RecState>(EVT.recState, (e) => {
         if (e.payload.recording) setPhase("listening");
-        // Stop → processing (unless an error already came through).
         else setPhase((p) => (p === "error" ? p : "transcribing"));
       }),
     );
@@ -40,11 +32,7 @@ export function Hud() {
         (phase === "error" ? " error" : "")
       }
     >
-      <span className="ck tl" />
-      <span className="ck tr" />
-      <span className="ck bl" />
-      <span className="ck br" />
-      <Logo recording={phase !== "error"} />
+      <Logo recording={phase !== "error"} dark />
       <HudMeter phase={phase} />
     </div>
   );

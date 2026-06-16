@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { EVT, type MicLevel } from "../lib/events";
 
-const COUNT = 14;
+const COUNT = 7;
 
 /** HUD level indicator — square blocks matching the app footer meter
  *  (src/components/VolumeMeter.tsx). Updates the DOM imperatively (no React
@@ -29,12 +29,12 @@ export function HudMeter({ phase }: { phase: "listening" | "transcribing" | "err
     }
 
     if (phase === "transcribing") {
-      // Indeterminate progress: a 3-wide lit band bounces left↔right.
+      // Indeterminate progress: a 2-wide lit band bounces left↔right.
       const period = 900; // ms for one left→right pass
       let raf = requestAnimationFrame(function draw() {
         const t = (performance.now() % (period * 2)) / period; // 0..2
         const head = (t < 1 ? t : 2 - t) * (COUNT - 1); // triangle 0..(N-1)..0
-        paint((i) => Math.abs(i - head) < 1.5);
+        paint((i) => Math.abs(i - head) < 1);
         raf = requestAnimationFrame(draw);
       });
       return () => cancelAnimationFrame(raf);
