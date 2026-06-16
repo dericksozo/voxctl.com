@@ -41,13 +41,14 @@ body {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 9px 16px;
-  background: rgba(243, 244, 246, 0.9);
+  gap: 8px;
+  padding: 6px 11px;
+  background: rgba(8, 10, 14, 0.2);
   -webkit-backdrop-filter: blur(18px) saturate(140%);
   backdrop-filter: blur(18px) saturate(140%);
-  border: 1px solid var(--line);
-  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(128, 128, 140, 0.25);
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22);
 }
 /* faint grid background */
 .hud::before {
@@ -78,8 +79,8 @@ body {
 /* corner brackets (ported from the app's .frame) */
 .ck {
   position: absolute;
-  width: 9px;
-  height: 9px;
+  width: 7px;
+  height: 7px;
   z-index: 3;
 }
 .ck.tl {
@@ -109,8 +110,8 @@ body {
 
 /* logo — pink chevron blinks while recording */
 .logo-mark {
-  width: 26px;
-  height: 26px;
+  width: 19px;
+  height: 19px;
   flex: none;
   display: block;
 }
@@ -136,11 +137,11 @@ body {
 /* square level meter (matches the app footer meter) */
 .blocks {
   display: inline-flex;
-  gap: 3px;
+  gap: 2px;
 }
 .blk {
-  width: 9px;
-  height: 9px;
+  width: 7px;
+  height: 7px;
   border: 1px solid var(--line);
 }
 .blk.on {
