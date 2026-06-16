@@ -455,7 +455,9 @@ impl FileTranscriber for XaiTranscriber {
             form = form.text("timestamp_granularities", "word");
         }
         if !opts.keywords.is_empty() {
-            form = form.text("keyterm", opts.keywords.join(" "));
+            let kw = opts.keywords.join(" ");
+            eprintln!("xai file keyterm: {kw}");
+            form = form.text("keyterm", kw);
         }
         form = form.part("file", wav_part(wav)?);
 

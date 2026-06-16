@@ -81,6 +81,7 @@ fn build_url(opts: &TranscribeOptions) -> String {
     if !opts.keywords.is_empty() {
         url.push_str(&format!("&keyterm={}", enc(&opts.keywords.join(" "))));
     }
+    eprintln!("xai ws url: {url}");
     url
 }
 
