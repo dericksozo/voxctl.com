@@ -156,6 +156,7 @@ pub fn run() {
             commands::history::delete_recordings,
             commands::history::toggle_favorite,
             commands::history::increment_copy,
+            commands::history::reveal_in_finder,
             commands::history::storage_stats,
             commands::transcription::retranscribe,
         ])

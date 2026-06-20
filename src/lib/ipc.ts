@@ -72,6 +72,9 @@ export const deleteRecording = (id: number) => invoke<void>("delete_recording", 
 export const deleteRecordings = (ids: number[]) => invoke<void>("delete_recordings", { ids });
 export const toggleFavorite = (id: number) => invoke<boolean>("toggle_favorite", { id });
 export const incrementCopy = (id: number) => invoke<number>("increment_copy", { id });
+/** Reveal a recording's WAV file in Finder (macOS) or the platform's file manager. */
+export const revealInFinder = (id: number) =>
+  invoke<void>("reveal_in_finder", { id });
 /** Result of a re-run: the transcript text plus whether diarization was requested
  *  but the provider returned no speaker labels (a known xAI long-file limitation). */
 export type RerunResult = {
