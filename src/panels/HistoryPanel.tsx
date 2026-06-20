@@ -419,6 +419,7 @@ export function HistoryPanel({
   stopToken = 0,
   transitioning = false,
   onSection,
+  onCopyFlash,
 }: {
   history: HistoryItem[] | null | undefined;
   modes: Mode[];
@@ -432,6 +433,8 @@ export function HistoryPanel({
   transitioning?: boolean;
   /** Reports the day group nearest the top so the header reads "// HOME / TODAY". */
   onSection?: (s: { label: string; desc: string } | null) => void;
+  /** Flash a message in SYS.DESC after Cmd+C copy. */
+  onCopyFlash?: (msg: string) => void;
 }) {
   const [expanded, setExpanded] = useState<number | null>(null);
   // Defer the (heavy) card list until the panel-switch animation settles, so
@@ -467,6 +470,19 @@ export function HistoryPanel({
   const copyTref = useRef<number | undefined>(undefined);
   const audioRef = useRef<ActiveAudio | null>(null);
   const playSeq = useRef(0);
+  // Refs for keyboard shortcut – kept current so the listener stays stable.
+  const expandedRef = useRef(expanded);
+  const tabRef = useRef(tab);
+  const historyRef = useRef(history);
+  const detailRef = useRef(detail);
+  const onChangeRef = useRef(onChange);
+  const onCopyFlashRef = useRef(onCopyFlash);
+  expandedRef.current = expanded;
+  tabRef.current = tab;
+  historyRef.current = history;
+  detailRef.current = detail;
+  onChangeRef.current = onChange;
+  onCopyFlashRef.current = onCopyFlash;
 
   const stopPlayback = useCallback((updateState = true) => {
     playSeq.current += 1;
@@ -511,6 +527,66 @@ export function HistoryPanel({
     document.addEventListener("click", onDocClick);
     return () => document.removeEventListener("click", onDocClick);
   }, [confirmDel]);
+
+  // Cmd+C copies the transcript text for the currently-active tab.  Uses refs
+  // for every dynamic value so the listener stays stable.
+  useEffect(() => {
+    const onKeyDown = async (e: KeyboardEvent) => {
+      const mod = navigator.platform.includes("Mac") ? e.metaKey : e.ctrlKey;
+      if (!mod || e.key !== "c") return;
+
+      const tag = document.activeElement?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+      const expId = expandedRef.current;
+      if (expId == null) return;
+
+      const items = historyRef.current;
+      if (!items) return;
+      const item = items.find((h) => h.id === expId);
+      if (!item) return;
+
+      const tabs: { key: TabKey; label: string }[] = [{ key: "text", label: "" }];
+      if (item.hasWordStamps) tabs.push({ key: "stamps", label: "" });
+      if (item.hasSpeakers) tabs.push({ key: "speakers", label: "" });
+      const effTab: TabKey = tabs.some((x) => x.key === tabRef.current) ? tabRef.current : "text";
+
+      const d = detailRef.current.get(item.id);
+      const expWordStamps = d?.wordStamps ?? [];
+      const expSpeakers = d?.speakers ?? [];
+      const copyItem: HistoryItem = { ...item, wordStamps: expWordStamps, speakers: expSpeakers };
+
+      const text = copyTextFor(copyItem, effTab);
+
+      e.preventDefault();
+
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        /* ignore */
+      }
+      try {
+        await incrementCopy(item.id);
+        onChangeRef.current();
+      } catch {
+        /* backend may be a stub */
+      }
+      setCopied(item.id);
+      window.clearTimeout(copyTref.current);
+      copyTref.current = window.setTimeout(() => setCopied(null), 1100);
+
+      const flashMsg =
+        effTab === "stamps"
+          ? t("history.copiedTimestamps")
+          : effTab === "speakers"
+            ? t("history.copiedSpeakerLabels")
+            : t("history.copiedPlainText");
+      onCopyFlashRef.current?.(flashMsg);
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   // Fetch word/speaker detail for the expanded card if it has any and we haven't
   // already. The list ships only boolean flags; the (possibly large) arrays load
