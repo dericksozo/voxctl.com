@@ -6,21 +6,29 @@
 use tauri::{AppHandle, LogicalPosition, Manager, WebviewUrl, WebviewWindowBuilder};
 
 const LABEL: &str = "hud";
-const W: f64 = 300.0;
-const H: f64 = 64.0;
+const W: f64 = 116.0;
+const H: f64 = 38.0;
 const BOTTOM_MARGIN: f64 = 22.0;
 
 fn position(app: &AppHandle, win: &tauri::WebviewWindow) {
     if let Ok(Some(monitor)) = app.primary_monitor() {
         let scale = monitor.scale_factor();
         let size = monitor.size();
-        let pos = monitor.position();
+        let origin = monitor.position();
         let screen_w = size.width as f64 / scale;
         let screen_h = size.height as f64 / scale;
-        let origin_x = pos.x as f64 / scale;
-        let origin_y = pos.y as f64 / scale;
-        let x = origin_x + (screen_w - W) / 2.0;
-        let y = origin_y + screen_h - H - BOTTOM_MARGIN;
+        let origin_x = origin.x as f64 / scale;
+        let origin_y = origin.y as f64 / scale;
+
+        let win_size = win.outer_size().unwrap_or(tauri::PhysicalSize::new(
+            (W * scale) as u32,
+            (H * scale) as u32,
+        ));
+        let win_w = win_size.width as f64 / scale;
+        let win_h = win_size.height as f64 / scale;
+
+        let x = origin_x + (screen_w - win_w) / 2.0;
+        let y = origin_y + screen_h - win_h - BOTTOM_MARGIN;
         let _ = win.set_position(LogicalPosition::new(x, y));
     }
 }
@@ -63,6 +71,9 @@ pub fn show_hud(app: &AppHandle) {
             }
         },
     };
+    // Let mouse events pass through the HUD window so it never blocks clicks on
+    // the app behind it. The HUD is display-only — it has no interactive elements.
+    let _ = win.set_ignore_cursor_events(true);
     position(app, &win);
     // Order it in WITHOUT focusing, so the user's frontmost text field keeps key
     // focus (critical for injection). We never call set_focus on the HUD.
