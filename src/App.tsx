@@ -75,6 +75,8 @@ export default function App() {
   /** Active sub-section (scroll-driven) → header sub-title + SYS.DESC. Reported by
    *  panels that have one (Settings sections, Home day groups); null otherwise. */
   const [headerSection, setHeaderSection] = useState<{ label: string; desc: string } | null>(null);
+  const [flashDesc, setFlashDesc] = useState<string | null>(null);
+  const flashDescTimer = useRef<number | undefined>(undefined);
   const timers = useRef<number[]>([]);
   const toastTimer = useRef<number | undefined>(undefined);
   const historyDebounce = useRef<number | undefined>(undefined);
@@ -161,6 +163,13 @@ export default function App() {
     stats: t("nav.stats.desc"),
     settings: t("nav.settings.desc"),
   };
+
+  // Flash a message in SYS.DESC (e.g. "COPIED PLAIN TEXT") for 2 s then revert.
+  const handleCopyFlash = useCallback((msg: string) => {
+    window.clearTimeout(flashDescTimer.current);
+    setFlashDesc(msg);
+    flashDescTimer.current = window.setTimeout(() => setFlashDesc(null), 2000);
+  }, []);
 
   const switchTo = useCallback(
     (id: string) => {
@@ -260,6 +269,7 @@ export default function App() {
             stopToken={audioStopToken}
             transitioning={phase !== "idle"}
             onSection={setHeaderSection}
+            onCopyFlash={handleCopyFlash}
           />
         );
       case "stats":
@@ -295,7 +305,7 @@ export default function App() {
 
   const baseLabel = MENU.find((m) => m.id === view)?.label ?? "";
   const sectionActive = headerSection;
-  const descText = sectionActive?.desc ? sectionActive.desc : (DESC[view] ?? "");
+  const descText = flashDesc ?? (sectionActive?.desc ? sectionActive.desc : (DESC[view] ?? ""));
   const frameCls = "content-frame " + (phase === "closing" ? "closing" : phase === "opening" ? "opening" : "");
 
   return (
