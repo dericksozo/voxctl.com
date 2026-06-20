@@ -282,28 +282,79 @@
   color: var(--ink);
   white-space: pre-wrap;
 }
-.hm-play-row {
+/* ── action toolbar ── */
+.hm-actbar {
   display: flex;
   align-items: center;
-  gap: 14px;
-  margin-bottom: 18px;
-}
-.hm-play-read {
-  font-size: 11.5px;
-  letter-spacing: 0.1em;
-  color: var(--ink-2);
-  font-variant-numeric: tabular-nums;
-}
-.hm-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  justify-content: space-between;
   margin-bottom: 22px;
 }
-.hm-actions-end {
-  margin-left: auto;
+
+/* connected button group (left side) — buttons share borders */
+.hm-actgrp {
+  display: inline-flex;
 }
+.hm-actbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+  padding: 0;
+}
+/* merge adjacent borders */
+.hm-actbtn + .hm-actbtn {
+  margin-left: -1px;
+}
+/* re-run button is inside hm-menu-wrap (for the dropdown) so it breaks the
+   adjacent-sibling chain; pull it left to merge with the preceding button. */
+.hm-menu-wrap > .hm-actbtn:first-child {
+  margin-left: -1px;
+}
+.hm-actbtn:hover {
+  z-index: 1;
+  position: relative;
+  background: #fff;
+  border-color: var(--ink-3);
+  color: var(--ink);
+}
+.hm-actbtn:active {
+  transform: translateY(1px);
+}
+.hm-actbtn[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* copy — pink border accent (icon color stays neutral) */
+.hm-actbtn--mag {
+  border-color: var(--mag-line);
+}
+.hm-actbtn--mag:hover {
+  background: var(--mag-soft);
+  border-color: var(--mag);
+}
+
+/* delete — danger hover (not in the connected group, has its own border) */
+.hm-actbtn--danger:hover {
+  background: rgba(255, 45, 45, 0.08);
+  border-color: var(--err);
+  color: var(--err);
+}
+/* confirm mode — danger styling is "latched on" while awaiting the second click */
+.hm-actbtn--confirm,
+.hm-actbtn--confirm:hover {
+  background: rgba(255, 45, 45, 0.08);
+  border-color: var(--err);
+  color: var(--err);
+}
+
 .hm-queued {
   font-size: 11px;
   letter-spacing: 0.1em;
@@ -364,32 +415,6 @@
   font-size: 9px;
   letter-spacing: 0.12em;
   color: var(--mag);
-}
-
-/* delete two-step confirm */
-.hm-del {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  border: 1px solid var(--err);
-  padding: 5px 5px 5px 14px;
-  background: rgba(255, 45, 45, 0.05);
-}
-.hm-del-q {
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  color: var(--ink);
-  white-space: nowrap;
-}
-.vx-btn.hm-del-go {
-  color: #fff;
-  background: var(--err);
-  border-color: var(--err);
-}
-.vx-btn.hm-del-go:hover {
-  background: var(--err);
-  border-color: var(--err);
-  filter: brightness(1.06);
 }
 
 /* post-run notice: diarization requested but no speaker labels returned. Neutral

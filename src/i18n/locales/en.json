@@ -72,6 +72,8 @@
   "history.play": "PLAY",
   "history.stop": "STOP",
   "history.retranscribe": "RE-RUN",
+  "history.reveal": "REVEAL AUDIO IN FINDER",
+  "history.deleteConfirm": "ARE YOU SURE ?",
   "history.took": "TOOK",
   "history.tabText": "PLAIN TEXT",
   "history.tabStamps": "TIMESTAMPS",
