@@ -342,6 +342,13 @@
   border-color: var(--err);
   color: var(--err);
 }
+/* confirm mode — danger styling is "latched on" while awaiting the second click */
+.hm-actbtn--confirm,
+.hm-actbtn--confirm:hover {
+  background: rgba(255, 45, 45, 0.08);
+  border-color: var(--err);
+  color: var(--err);
+}
 
 .hm-queued {
   font-size: 11px;
@@ -403,32 +410,6 @@
   font-size: 9px;
   letter-spacing: 0.12em;
   color: var(--mag);
-}
-
-/* delete two-step confirm */
-.hm-del {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  border: 1px solid var(--err);
-  padding: 5px 5px 5px 14px;
-  background: rgba(255, 45, 45, 0.05);
-}
-.hm-del-q {
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  color: var(--ink);
-  white-space: nowrap;
-}
-.vx-btn.hm-del-go {
-  color: #fff;
-  background: var(--err);
-  border-color: var(--err);
-}
-.vx-btn.hm-del-go:hover {
-  background: var(--err);
-  border-color: var(--err);
-  filter: brightness(1.06);
 }
 
 /* post-run notice: diarization requested but no speaker labels returned. Neutral

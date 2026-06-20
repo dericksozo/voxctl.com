@@ -273,6 +273,84 @@ const IcoAlert = ({ size = 38 }: IcoProps) => (
   </Svg>
 );
 
+/** Icon button with a portaled vx-tip tooltip, matching ProviderChip's pattern.
+ *  When `pinned` is true the tip stays visible even on mouse-leave — used by the
+ *  delete button for its click-to-confirm flow. */
+function TipBtn({
+  className,
+  disabled,
+  onClick,
+  tip,
+  pinned,
+  children,
+}: {
+  className: string;
+  disabled?: boolean;
+  onClick: (e: React.MouseEvent) => void;
+  tip: string;
+  pinned?: boolean;
+  children: React.ReactNode;
+}) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const pinnedRef = useRef(false);
+  pinnedRef.current = !!pinned;
+
+  const place = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const x = Math.min(Math.max(r.left + r.width / 2, 12), window.innerWidth - 12);
+    setPos({ x, y: r.top });
+  }, []);
+
+  useEffect(() => {
+    if (!pos) return;
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
+  }, [pos, place]);
+
+  useEffect(() => {
+    if (pinned) place();
+  }, [pinned, place]);
+
+  const show = useCallback(() => {
+    place();
+  }, [place]);
+
+  const hide = useCallback(() => {
+    if (pinnedRef.current) return;
+    setPos(null);
+  }, []);
+
+  return (
+    <button
+      ref={ref}
+      type="button"
+      className={className}
+      disabled={disabled}
+      onClick={onClick}
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      aria-label={tip}
+    >
+      {children}
+      {pos && tip
+        ? createPortal(
+            <span className="vx-tip" style={{ left: pos.x, top: pos.y }}>
+              {tip}
+            </span>,
+            document.body,
+          )
+        : null}
+    </button>
+  );
+}
+
 /** Provider brand chip with mode tooltip (reuses the shared `.prov` class).
  *  The tooltip is rendered through a portal with `position: fixed` so it escapes
  *  the panel's scroll container (`overflow-y: auto` / `overflow-x: hidden`) instead
@@ -420,6 +498,19 @@ export function HistoryPanel({
     setWarnFor(null);
     setTab("text");
   }, [expanded]);
+
+  // Cancel delete confirmation on click outside the delete button.
+  useEffect(() => {
+    if (confirmDel === null) return;
+    const onDocClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest(".hm-actbtn--confirm")) {
+        setConfirmDel(null);
+      }
+    };
+    document.addEventListener("click", onDocClick);
+    return () => document.removeEventListener("click", onDocClick);
+  }, [confirmDel]);
 
   // Fetch word/speaker detail for the expanded card if it has any and we haven't
   // already. The list ships only boolean flags; the (possibly large) arrays load
@@ -962,46 +1053,42 @@ export function HistoryPanel({
                         {/* action toolbar */}
                         <div className="hm-actbar">
                           <div className="hm-actgrp">
-                            <button
-                              type="button"
+                            <TipBtn
                               className="hm-actbtn hm-actbtn--mag"
                               disabled={!hasText}
                               onClick={(e) => doCopy(e, item, copyTextFor(copyItem, effTab))}
-                              title={cp ? t("history.copied") : t("history.copy")}
+                              tip={cp ? t("history.copied") : t("history.copy")}
                             >
                               {cp ? <IcoCheck size={14} /> : <IcoCopy size={14} />}
-                            </button>
-                            <button
-                              type="button"
+                            </TipBtn>
+                            <TipBtn
                               className="hm-actbtn"
                               disabled={!audioReady}
                               onClick={(e) => doPlay(e, item)}
-                              title={playing === item.id ? t("history.stop") : t("history.play")}
+                              tip={playing === item.id ? t("history.stop") : t("history.play")}
                             >
                               {playing === item.id ? <IcoStop size={13} /> : <IcoPlay size={13} />}
-                            </button>
-                            <button
-                              type="button"
+                            </TipBtn>
+                            <TipBtn
                               className="hm-actbtn"
                               disabled={!audioReady}
                               onClick={(e) => doReveal(e, item)}
-                              title={t("history.reveal")}
+                              tip={t("history.reveal")}
                             >
                               <IcoFolder size={14} />
-                            </button>
+                            </TipBtn>
                             <div className="hm-menu-wrap">
-                              <button
-                                type="button"
+                              <TipBtn
                                 className="hm-actbtn"
                                 disabled={busy === item.id}
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setRerunFor(rerunFor === item.id ? null : item.id);
                                 }}
-                                title={t("history.retranscribe")}
+                                tip={t("history.retranscribe")}
                               >
                                 <IcoRerun size={14} />
-                              </button>
+                              </TipBtn>
                               {rerunFor === item.id ? (
                                 <div className="hm-menu" onClick={(e) => e.stopPropagation()}>
                                   {fileModes.length > 0 ? (
@@ -1009,9 +1096,6 @@ export function HistoryPanel({
                                       <div className="hm-menu-head">RE-RUN THROUGH MODE</div>
                                       {fileModes.map((m) => {
                                         const mp = modelById(registry, m.model)?.provider;
-                                        // A mode whose provider key was removed can't
-                                        // re-run; show it locked and route to Settings
-                                        // instead of attempting a doomed transcription.
                                         const usable = modeUsable(registry, providers, m.model);
                                         return (
                                           <button
@@ -1107,40 +1191,28 @@ export function HistoryPanel({
                               ) : null}
                             </div>
                           </div>
-                          {confirmDel === item.id ? (
-                            <div className="hm-del" onClick={(e) => e.stopPropagation()}>
-                              <span className="hm-del-q">{t("modes.delete")} ?</span>
-                              <button
-                                type="button"
-                                className="vx-btn"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setConfirmDel(null);
-                                }}
-                              >
-                                {t("modes.cancel")}
-                              </button>
-                              <button
-                                type="button"
-                                className="vx-btn hm-del-go"
-                                onClick={(e) => doDelete(e, item)}
-                              >
-                                {t("modes.delete")}
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              type="button"
-                              className="hm-actbtn hm-actbtn--danger"
-                              onClick={(e) => {
-                                e.stopPropagation();
+                          <TipBtn
+                            className={
+                              "hm-actbtn hm-actbtn--danger" +
+                              (confirmDel === item.id ? " hm-actbtn--confirm" : "")
+                            }
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (confirmDel === item.id) {
+                                doDelete(e, item);
+                              } else {
                                 setConfirmDel(item.id);
-                              }}
-                              title={t("modes.delete")}
-                            >
-                              <IcoTrash size={14} />
-                            </button>
-                          )}
+                              }
+                            }}
+                            tip={
+                              confirmDel === item.id
+                                ? t("history.deleteConfirm")
+                                : t("modes.delete")
+                            }
+                            pinned={confirmDel === item.id}
+                          >
+                            <IcoTrash size={14} />
+                          </TipBtn>
                         </div>
 
                         {/* metadata row */}
