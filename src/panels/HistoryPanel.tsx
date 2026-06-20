@@ -3,7 +3,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { t } from "../i18n";
-import { deleteRecording, getHistoryDetail, incrementCopy, retranscribe } from "../lib/ipc";
+import { deleteRecording, getHistoryDetail, incrementCopy, retranscribe, revealInFinder } from "../lib/ipc";
 import type { HistoryItem, Mode, SpeakerSeg, WordStamp } from "../lib/types";
 import {
   estimateCost,
@@ -549,8 +549,14 @@ export function HistoryPanel({
     copyTref.current = window.setTimeout(() => setCopied(null), 1100);
   }
 
-  function doReveal(e: React.MouseEvent, _item: HistoryItem) {
+  async function doReveal(e: React.MouseEvent, item: HistoryItem) {
     e.stopPropagation();
+    if (item.audioStatus !== "ready") return;
+    try {
+      await revealInFinder(item.id);
+    } catch (err) {
+      console.error("reveal in finder failed", err);
+    }
   }
 
   async function doPlay(e: React.MouseEvent, item: HistoryItem) {

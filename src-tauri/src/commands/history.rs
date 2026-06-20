@@ -2,6 +2,7 @@
 //! command emits `history-changed` so the UI refetches.
 
 use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_opener::OpenerExt;
 
 use crate::commands::config;
 use crate::events;
@@ -80,4 +81,18 @@ pub fn increment_copy(app: AppHandle, id: i64) -> Result<i64, String> {
     let count = history::increment_copy(&app.state::<HistoryDb>(), id);
     let _ = app.emit(events::HISTORY_CHANGED, ());
     Ok(count)
+}
+
+/// Reveal a recording's WAV file in macOS Finder (or the platform's file manager).
+#[tauri::command]
+pub fn reveal_in_finder(app: AppHandle, id: i64) -> Result<(), String> {
+    let db = app.state::<HistoryDb>();
+    let item = history::get(&db, id).ok_or("recording not found")?;
+    let path = std::path::Path::new(&item.audio_path);
+    if !path.exists() {
+        return Err("audio file no longer exists".into());
+    }
+    app.opener()
+        .reveal_item_in_dir(path)
+        .map_err(|e| e.to_string())
 }
