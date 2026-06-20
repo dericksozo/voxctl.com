@@ -311,6 +311,11 @@
 .hm-actbtn + .hm-actbtn {
   margin-left: -1px;
 }
+/* re-run button is inside hm-menu-wrap (for the dropdown) so it breaks the
+   adjacent-sibling chain; pull it left to merge with the preceding button. */
+.hm-menu-wrap > .hm-actbtn:first-child {
+  margin-left: -1px;
+}
 .hm-actbtn:hover {
   z-index: 1;
   position: relative;
