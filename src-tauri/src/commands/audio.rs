@@ -56,6 +56,7 @@ pub struct RecorderInner {
     /// History row reserved when capture starts so Home updates immediately.
     pub current_recording_id: Option<i64>,
     pub current_audio_path: Option<String>,
+    pub current_hex_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -335,7 +336,7 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
     // crash before stop then still leaves recoverable text (Path A).
     let lang_label = ctx.language.clone().unwrap_or_else(|| "auto".into());
     let mode_name = ctx.mode_name.clone().unwrap_or_else(|| "—".into());
-    let (recording_id, audio_path, started_at) = crate::history::reserve_recording(
+    let (recording_id, audio_path, started_at, hex_id) = crate::history::reserve_recording(
         app,
         &lang_label,
         &mode_name,
@@ -420,6 +421,7 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
         inner.session = session;
         inner.current_recording_id = Some(recording_id);
         inner.current_audio_path = Some(audio_path);
+        inner.current_hex_id = Some(hex_id);
     }
     let _ = app.emit(events::HISTORY_CHANGED, ());
     hud::show_hud(app);
@@ -438,7 +440,7 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
 
 pub fn stop(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<RecorderState>();
-    let (cap, ctx, session, recording_id, audio_path) = {
+    let (cap, ctx, session, recording_id, audio_path, _hex_id) = {
         let mut inner = state.0.lock().unwrap();
         if !inner.recording {
             return Ok(());
@@ -450,6 +452,7 @@ pub fn stop(app: &AppHandle) -> Result<(), String> {
             inner.session.take(),
             inner.current_recording_id.take(),
             inner.current_audio_path.take(),
+            inner.current_hex_id.take(),
         )
     };
 
