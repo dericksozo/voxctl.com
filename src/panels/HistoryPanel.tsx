@@ -143,8 +143,6 @@ function copyTextFor(item: HistoryItem, tab: TabKey): string {
   }
   return item.transcript;
 }
-const fmtCount = (n: number) => (n >= 10 ? "10+" : String(n));
-
 function fmtBytes(n: number): string {
   if (n <= 0) return "";
   if (n < 1024) return `${n} B`;
@@ -165,19 +163,6 @@ function statusChip(status: string): { label: string; cls: string } | null {
       return { label: t("history.statusNeeds"), cls: "err" };
     default:
       return null;
-  }
-}
-
-function audioLabel(item: HistoryItem): string {
-  switch (item.audioStatus) {
-    case "capturing":
-      return t("history.audioCapturing");
-    case "saving":
-      return t("history.audioSaving");
-    case "failed":
-      return t("history.audioFailed");
-    default:
-      return durLabel(item.durationSecs);
   }
 }
 
@@ -255,14 +240,14 @@ const IcoRerun = ({ size = 14 }: IcoProps) => (
     <path d="M21 3v5h-5" />
   </Svg>
 );
-const IcoChevDown = ({ size = 12 }: IcoProps) => (
-  <Svg size={size}>
-    <path d="m6 9 6 6 6-6" />
-  </Svg>
-);
 const IcoTrash = ({ size = 14 }: IcoProps) => (
   <Svg size={size}>
     <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m2 0v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6" />
+  </Svg>
+);
+const IcoFolder = ({ size = 14 }: IcoProps) => (
+  <Svg size={size}>
+    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
   </Svg>
 );
 const IcoMic = ({ size = 40 }: IcoProps) => (
@@ -471,6 +456,10 @@ export function HistoryPanel({
     setCopied(item.id);
     window.clearTimeout(copyTref.current);
     copyTref.current = window.setTimeout(() => setCopied(null), 1100);
+  }
+
+  function doReveal(e: React.MouseEvent, _item: HistoryItem) {
+    e.stopPropagation();
   }
 
   async function doPlay(e: React.MouseEvent, item: HistoryItem) {
@@ -970,195 +959,188 @@ export function HistoryPanel({
                           </div>
                         )}
 
-                        {/* play control */}
-                        <div className="hm-play-row">
-                          <button
-                            type="button"
-                            className="vx-btn vx-btn--mag"
-                            style={{ minWidth: 96, justifyContent: "center" }}
-                            disabled={!audioReady}
-                            onClick={(e) => doPlay(e, item)}
-                          >
-                            {playing === item.id ? <IcoStop size={13} /> : <IcoPlay size={13} />}
-                            {playing === item.id ? t("history.stop") : t("history.play")}
-                          </button>
-                          <span className="hm-play-read">{audioLabel(item)}</span>
-                        </div>
-
-                        {/* action row — copy follows the active tab */}
-                        <div className="hm-actions">
-                          <button
-                            type="button"
-                            className={"vx-btn" + (cp ? " vx-btn--mag" : "")}
-                            disabled={!hasText}
-                            onClick={(e) => doCopy(e, item, copyTextFor(copyItem, effTab))}
-                          >
-                            {cp ? <IcoCheck size={14} /> : <IcoCopy size={14} />}
-                            {cp ? t("history.copied") : t("history.copy")}
-                            {item.copyCount > 0 ? (
-                              <span style={{ color: "var(--ink-3)" }}>{fmtCount(item.copyCount)}</span>
-                            ) : null}
-                          </button>
-
-                          {/* re-transcribe (file-capable modes only) */}
-                          <div className="hm-menu-wrap">
+                        {/* action toolbar */}
+                        <div className="hm-actbar">
+                          <div className="hm-actgrp">
                             <button
                               type="button"
-                              className="vx-btn"
-                              disabled={busy === item.id}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setRerunFor(rerunFor === item.id ? null : item.id);
-                              }}
+                              className="hm-actbtn hm-actbtn--mag"
+                              disabled={!hasText}
+                              onClick={(e) => doCopy(e, item, copyTextFor(copyItem, effTab))}
+                              title={cp ? t("history.copied") : t("history.copy")}
                             >
-                              <IcoRerun size={14} />
-                              {busy === item.id ? "…" : t("history.retranscribe")}
-                              <span style={{ color: "var(--ink-3)" }}>
-                                <IcoChevDown size={12} />
-                              </span>
+                              {cp ? <IcoCheck size={14} /> : <IcoCopy size={14} />}
                             </button>
-                            {rerunFor === item.id ? (
-                              <div className="hm-menu" onClick={(e) => e.stopPropagation()}>
-                                {fileModes.length > 0 ? (
-                                  <>
-                                    <div className="hm-menu-head">RE-RUN THROUGH MODE</div>
-                                    {fileModes.map((m) => {
-                                      const mp = modelById(registry, m.model)?.provider;
-                                      // A mode whose provider key was removed can't
-                                      // re-run; show it locked and route to Settings
-                                      // instead of attempting a doomed transcription.
-                                      const usable = modeUsable(registry, providers, m.model);
-                                      return (
-                                        <button
-                                          key={m.id}
-                                          type="button"
-                                          className={"hm-menu-item" + (usable ? "" : " is-locked")}
-                                          title={usable ? t("history.rerunHeadline") : undefined}
-                                          onClick={(e) => {
-                                            if (!usable) {
-                                              e.stopPropagation();
-                                              setRerunFor(null);
-                                              go("settings");
-                                              return;
-                                            }
-                                            if (
-                                              shouldWarnXaiLongDiarization(registry, m, item.durationSecs)
-                                            ) {
-                                              e.stopPropagation();
-                                              setRerunFor(null);
-                                              setWarnFor({ id: item.id, modeId: m.id });
-                                              return;
-                                            }
-                                            doRerun(e, item, m.id);
-                                          }}
-                                        >
-                                          {mp ? (
-                                            <span className="hm-menu-logo">
-                                              <ProviderLogo id={mp} size={13} />
-                                            </span>
-                                          ) : null}
-                                          {modeLabel(m)}
-                                          {usable ? null : (
-                                            <span className="hm-menu-lock">{t("history.addKey")}</span>
-                                          )}
-                                        </button>
-                                      );
-                                    })}
-                                  </>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    className="hm-menu-item"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setRerunFor(null);
-                                      go("modes");
-                                    }}
-                                  >
-                                    ＋ {t("history.rerunCreate")}
-                                  </button>
-                                )}
-                              </div>
-                            ) : null}
-                            {warnFor?.id === item.id ? (
-                              <div className="hm-warn" onClick={(e) => e.stopPropagation()}>
-                                <div className="hm-warn-head">
-                                  {t("history.xaiLongDiarizationWarning.title")}
-                                </div>
-                                <p className="hm-warn-body">
-                                  {t("history.xaiLongDiarizationWarning.body")}
-                                </p>
-                                <div className="hm-warn-actions">
-                                  <button
-                                    type="button"
-                                    className="vx-btn vx-btn--mag"
-                                    onClick={(e) => doRerun(e, item, warnFor.modeId)}
-                                  >
-                                    {t("history.xaiLongDiarizationWarning.continue")}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="vx-btn"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setWarnFor(null);
-                                      setRerunFor(item.id);
-                                    }}
-                                  >
-                                    {t("history.xaiLongDiarizationWarning.chooseMode")}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="vx-btn"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setWarnFor(null);
-                                    }}
-                                  >
-                                    {t("history.xaiLongDiarizationWarning.cancel")}
-                                  </button>
-                                </div>
-                              </div>
-                            ) : null}
-                          </div>
-
-                          {/* delete — two-step confirm */}
-                          <div className="hm-actions-end">
-                            {confirmDel === item.id ? (
-                              <div className="hm-del" onClick={(e) => e.stopPropagation()}>
-                                <span className="hm-del-q">{t("modes.delete")} ?</span>
-                                <button
-                                  type="button"
-                                  className="vx-btn"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setConfirmDel(null);
-                                  }}
-                                >
-                                  {t("modes.cancel")}
-                                </button>
-                                <button
-                                  type="button"
-                                  className="vx-btn hm-del-go"
-                                  onClick={(e) => doDelete(e, item)}
-                                >
-                                  {t("modes.delete")}
-                                </button>
-                              </div>
-                            ) : (
+                            <button
+                              type="button"
+                              className="hm-actbtn"
+                              disabled={!audioReady}
+                              onClick={(e) => doPlay(e, item)}
+                              title={playing === item.id ? t("history.stop") : t("history.play")}
+                            >
+                              {playing === item.id ? <IcoStop size={13} /> : <IcoPlay size={13} />}
+                            </button>
+                            <button
+                              type="button"
+                              className="hm-actbtn"
+                              disabled={!audioReady}
+                              onClick={(e) => doReveal(e, item)}
+                              title={t("history.reveal")}
+                            >
+                              <IcoFolder size={14} />
+                            </button>
+                            <div className="hm-menu-wrap">
                               <button
                                 type="button"
-                                className="vx-btn vx-btn--danger"
+                                className="hm-actbtn"
+                                disabled={busy === item.id}
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setConfirmDel(item.id);
+                                  setRerunFor(rerunFor === item.id ? null : item.id);
+                                }}
+                                title={t("history.retranscribe")}
+                              >
+                                <IcoRerun size={14} />
+                              </button>
+                              {rerunFor === item.id ? (
+                                <div className="hm-menu" onClick={(e) => e.stopPropagation()}>
+                                  {fileModes.length > 0 ? (
+                                    <>
+                                      <div className="hm-menu-head">RE-RUN THROUGH MODE</div>
+                                      {fileModes.map((m) => {
+                                        const mp = modelById(registry, m.model)?.provider;
+                                        // A mode whose provider key was removed can't
+                                        // re-run; show it locked and route to Settings
+                                        // instead of attempting a doomed transcription.
+                                        const usable = modeUsable(registry, providers, m.model);
+                                        return (
+                                          <button
+                                            key={m.id}
+                                            type="button"
+                                            className={"hm-menu-item" + (usable ? "" : " is-locked")}
+                                            title={usable ? t("history.rerunHeadline") : undefined}
+                                            onClick={(e) => {
+                                              if (!usable) {
+                                                e.stopPropagation();
+                                                setRerunFor(null);
+                                                go("settings");
+                                                return;
+                                              }
+                                              if (
+                                                shouldWarnXaiLongDiarization(registry, m, item.durationSecs)
+                                              ) {
+                                                e.stopPropagation();
+                                                setRerunFor(null);
+                                                setWarnFor({ id: item.id, modeId: m.id });
+                                                return;
+                                              }
+                                              doRerun(e, item, m.id);
+                                            }}
+                                          >
+                                            {mp ? (
+                                              <span className="hm-menu-logo">
+                                                <ProviderLogo id={mp} size={13} />
+                                              </span>
+                                            ) : null}
+                                            {modeLabel(m)}
+                                            {usable ? null : (
+                                              <span className="hm-menu-lock">{t("history.addKey")}</span>
+                                            )}
+                                          </button>
+                                        );
+                                      })}
+                                    </>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="hm-menu-item"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setRerunFor(null);
+                                        go("modes");
+                                      }}
+                                    >
+                                      ＋ {t("history.rerunCreate")}
+                                    </button>
+                                  )}
+                                </div>
+                              ) : null}
+                              {warnFor?.id === item.id ? (
+                                <div className="hm-warn" onClick={(e) => e.stopPropagation()}>
+                                  <div className="hm-warn-head">
+                                    {t("history.xaiLongDiarizationWarning.title")}
+                                  </div>
+                                  <p className="hm-warn-body">
+                                    {t("history.xaiLongDiarizationWarning.body")}
+                                  </p>
+                                  <div className="hm-warn-actions">
+                                    <button
+                                      type="button"
+                                      className="vx-btn vx-btn--mag"
+                                      onClick={(e) => doRerun(e, item, warnFor.modeId)}
+                                    >
+                                      {t("history.xaiLongDiarizationWarning.continue")}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="vx-btn"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setWarnFor(null);
+                                        setRerunFor(item.id);
+                                      }}
+                                    >
+                                      {t("history.xaiLongDiarizationWarning.chooseMode")}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="vx-btn"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setWarnFor(null);
+                                      }}
+                                    >
+                                      {t("history.xaiLongDiarizationWarning.cancel")}
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                          {confirmDel === item.id ? (
+                            <div className="hm-del" onClick={(e) => e.stopPropagation()}>
+                              <span className="hm-del-q">{t("modes.delete")} ?</span>
+                              <button
+                                type="button"
+                                className="vx-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setConfirmDel(null);
                                 }}
                               >
-                                <IcoTrash size={14} />
+                                {t("modes.cancel")}
+                              </button>
+                              <button
+                                type="button"
+                                className="vx-btn hm-del-go"
+                                onClick={(e) => doDelete(e, item)}
+                              >
                                 {t("modes.delete")}
                               </button>
-                            )}
-                          </div>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              className="hm-actbtn hm-actbtn--danger"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setConfirmDel(item.id);
+                              }}
+                              title={t("modes.delete")}
+                            >
+                              <IcoTrash size={14} />
+                            </button>
+                          )}
                         </div>
 
                         {/* metadata row */}

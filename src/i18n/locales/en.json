@@ -72,6 +72,7 @@
   "history.play": "PLAY",
   "history.stop": "STOP",
   "history.retranscribe": "RE-RUN",
+  "history.reveal": "REVEAL IN FINDER",
   "history.took": "TOOK",
   "history.tabText": "PLAIN TEXT",
   "history.tabStamps": "TIMESTAMPS",
