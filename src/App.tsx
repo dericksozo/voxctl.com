@@ -80,6 +80,8 @@ export default function App() {
   const timers = useRef<number[]>([]);
   const toastTimer = useRef<number | undefined>(undefined);
   const historyDebounce = useRef<number | undefined>(undefined);
+  /** Hex ID of the currently-expanded recording (null = viewing all). */
+  const [activeHexId, setActiveHexId] = useState<string | null>(null);
 
   const refreshModes = useCallback(() => {
     listModes().then(setModes).catch(() => {});
@@ -270,6 +272,7 @@ export default function App() {
             transitioning={phase !== "idle"}
             onSection={setHeaderSection}
             onCopyFlash={handleCopyFlash}
+            onActiveHexIdChange={setActiveHexId}
           />
         );
       case "stats":
@@ -307,6 +310,16 @@ export default function App() {
   const sectionActive = headerSection;
   const descText = flashDesc ?? (sectionActive?.desc ? sectionActive.desc : (DESC[view] ?? ""));
   const frameCls = "content-frame " + (phase === "closing" ? "closing" : phase === "opening" ? "opening" : "");
+  const trHexPart = activeHexId ? `0x${activeHexId}` : "ALL";
+  const frameTr = useMemo(
+    () => (
+      <>
+        VX-
+        <Typewriter key={trHexPart} text={trHexPart} run={true} speed={11} />
+      </>
+    ),
+    [trHexPart],
+  );
 
   return (
     <div className={"app" + (theme.scanlines ? " scan" : "") + (theme.grid ? " gridbg" : "")}>
@@ -421,7 +434,7 @@ export default function App() {
                 ) : null}
               </>
             }
-            tr="VX-0xA7"
+            tr={frameTr}
           >
             <div className="content">{renderPanel()}</div>
           </Frame>

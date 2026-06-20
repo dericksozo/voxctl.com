@@ -4,6 +4,7 @@
 //! recording is saved here, even when injection or transcription fails, so a
 //! capture is never lost (brief §3).
 
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -57,6 +58,10 @@ pub struct HistoryItem {
     /// labels (matches the UI's speakerSegments()). Gates the SPEAKERS tab.
     #[serde(default)]
     pub has_speakers: bool,
+    /// 4-char random hex ID (e.g. "A7F3") generated at recording start. Rendered
+    /// as VX-0x{hex_id} in the UI. None for recordings created before this field.
+    #[serde(default)]
+    pub hex_id: Option<String>,
 }
 
 /// Parse the persisted `extra_json` blob (`{ words, speakers }`) into the typed
@@ -81,6 +86,20 @@ fn parse_extra(s: Option<String>) -> (Vec<WordStamp>, Vec<SpeakerSeg>) {
 pub struct HistoryDb(pub Mutex<Connection>);
 
 static FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Generate a random 4-char uppercase hex ID (e.g. "A7F3") for a new recording.
+/// Mixes the current time in nanoseconds with the atomic file counter for
+/// uniqueness. Zero-dependency, called once per recording on the hot path.
+fn generate_hex_id() -> String {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
+        .hash(&mut h);
+    FILE_COUNTER.fetch_add(1, Ordering::Relaxed).hash(&mut h);
+    format!("{:04X}", (h.finish() & 0xFFFF) as u16)
+}
 
 fn now_millis() -> i64 {
     SystemTime::now()
@@ -121,6 +140,7 @@ fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
             audio_bytes   INTEGER NOT NULL DEFAULT 0,
             audio_status  TEXT    NOT NULL DEFAULT 'ready',
             transcription_ms INTEGER NOT NULL DEFAULT 0,
+            hex_id        TEXT,
             extra_json    TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_recordings_created_at ON recordings(created_at DESC);",
@@ -163,6 +183,9 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     }
     if !have.iter().any(|c| c == "extra_json") {
         conn.execute_batch("ALTER TABLE recordings ADD COLUMN extra_json TEXT")?;
+    }
+    if !have.iter().any(|c| c == "hex_id") {
+        conn.execute_batch("ALTER TABLE recordings ADD COLUMN hex_id TEXT")?;
     }
     // Index `status` for the retry worker's poll and startup reconciliation
     // (perf §3.3/§4.1). Created here (not in create_schema) so it runs only
@@ -243,12 +266,13 @@ fn insert_row(
     model_id: &str,
     audio_bytes: i64,
     audio_status: &str,
+    hex_id: Option<&str>,
 ) -> rusqlite::Result<i64> {
     conn.execute(
         "INSERT INTO recordings
-            (created_at, transcript, language, mode_name, app_name, website, duration_secs, words, audio_path, status, model_id, audio_bytes, audio_status)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-        params![created_at, transcript, language, mode_name, app_name, website, duration_secs, words, audio_path, status, model_id, audio_bytes, audio_status],
+            (created_at, transcript, language, mode_name, app_name, website, duration_secs, words, audio_path, status, model_id, audio_bytes, audio_status, hex_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        params![created_at, transcript, language, mode_name, app_name, website, duration_secs, words, audio_path, status, model_id, audio_bytes, audio_status, hex_id],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -276,6 +300,7 @@ fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<HistoryItem> {
         speakers: Vec::new(),
         has_word_stamps: false,
         has_speakers: false,
+        hex_id: row.get(18)?,
     };
     let (word_stamps, speakers) = parse_extra(row.get::<_, Option<String>>(17)?);
     item.has_word_stamps = !word_stamps.is_empty();
@@ -286,7 +311,7 @@ fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<HistoryItem> {
 }
 
 const SELECT_COLS: &str =
-    "id, created_at, transcript, language, mode_name, app_name, website, duration_secs, words, favorite, copy_count, audio_path, status, model_id, audio_bytes, audio_status, transcription_ms, extra_json";
+    "id, created_at, transcript, language, mode_name, app_name, website, duration_secs, words, favorite, copy_count, audio_path, status, model_id, audio_bytes, audio_status, transcription_ms, extra_json, hex_id";
 
 /// Columns for the list view: everything in SELECT_COLS *except* extra_json, plus
 /// two cheap flags derived in SQL. The (potentially MB) word/speaker arrays never
@@ -295,7 +320,7 @@ const SELECT_COLS: &str =
 /// never collides with the plural top-level keys (`"words"` / `"speakers"`):
 ///   - any `"word":`    ⟺ the words array is non-empty (STAMPS tab)
 ///   - any `"speaker":` ⟺ a SpeakerSeg or a word-level speaker exists (SPEAKERS tab)
-const LIST_COLS: &str = "id, created_at, transcript, language, mode_name, app_name, website, duration_secs, words, favorite, copy_count, audio_path, status, model_id, audio_bytes, audio_status, transcription_ms, (COALESCE(instr(extra_json, '\"word\":'), 0) > 0), (COALESCE(instr(extra_json, '\"speaker\":'), 0) > 0)";
+const LIST_COLS: &str = "id, created_at, transcript, language, mode_name, app_name, website, duration_secs, words, favorite, copy_count, audio_path, status, model_id, audio_bytes, audio_status, transcription_ms, (COALESCE(instr(extra_json, '\"word\":'), 0) > 0), (COALESCE(instr(extra_json, '\"speaker\":'), 0) > 0), hex_id";
 
 /// Row → list item: full metadata + transcript, but no word/speaker arrays (the
 /// flags at columns 17/18 gate the detail tabs instead). See LIST_COLS.
@@ -322,12 +347,12 @@ fn row_to_list_item(row: &rusqlite::Row) -> rusqlite::Result<HistoryItem> {
         speakers: Vec::new(),
         has_word_stamps: row.get::<_, i64>(17)? != 0,
         has_speakers: row.get::<_, i64>(18)? != 0,
+        hex_id: row.get(19)?,
     })
 }
 
-fn next_recording_path(app: &AppHandle, created_at: i64) -> PathBuf {
-    let n = FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    recordings_dir(app).join(format!("rec-{created_at}-{n}.wav"))
+fn next_recording_path(app: &AppHandle, hex_id: &str) -> PathBuf {
+    recordings_dir(app).join(format!("VX-0x{}.wav", hex_id))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -338,9 +363,10 @@ pub fn reserve_recording(
     app_name: Option<&str>,
     website: Option<&str>,
     model_id: &str,
-) -> Result<(i64, String, i64), String> {
+) -> Result<(i64, String, i64, String), String> {
+    let hex_id = generate_hex_id();
     let created_at = now_millis();
-    let path = next_recording_path(app, created_at);
+    let path = next_recording_path(app, &hex_id);
     let path_str = path.to_string_lossy().to_string();
     let db = app.state::<HistoryDb>();
     let conn = db.0.lock().unwrap();
@@ -359,9 +385,10 @@ pub fn reserve_recording(
         model_id,
         0,
         "capturing",
+        Some(&hex_id),
     )
     .map_err(|e| format!("reserve recording: {e}"))?;
-    Ok((id, path_str, created_at))
+    Ok((id, path_str, created_at, hex_id))
 }
 
 pub fn mark_stopped(db: &HistoryDb, id: i64, duration_secs: f64, status: &str, audio_status: &str) {
@@ -797,6 +824,7 @@ mod tests {
             "gpt-4o-transcribe",
             12345,
             "ready",
+            None,
         )
         .unwrap();
         assert_eq!(id, 1);
@@ -894,6 +922,7 @@ mod tests {
             "grok-stt",
             0,
             "ready",
+            None,
         )
         .unwrap();
         let db = HistoryDb(Mutex::new(conn));
@@ -915,7 +944,7 @@ mod tests {
 
     fn mk_row(conn: &Connection, at: i64, path: &str, status: &str) -> i64 {
         insert_row(
-            conn, at, "t", "en", "M", None, None, 1.0, 1, path, status, "m", 100, "ready",
+            conn, at, "t", "en", "M", None, None, 1.0, 1, path, status, "m", 100, "ready", None,
         )
         .unwrap()
     }
@@ -985,6 +1014,7 @@ mod tests {
             "gpt-realtime-whisper",
             0,
             "capturing",
+            None,
         )
         .unwrap();
         let db = HistoryDb(Mutex::new(conn));

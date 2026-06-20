@@ -420,6 +420,7 @@ export function HistoryPanel({
   transitioning = false,
   onSection,
   onCopyFlash,
+  onActiveHexIdChange,
 }: {
   history: HistoryItem[] | null | undefined;
   modes: Mode[];
@@ -435,6 +436,8 @@ export function HistoryPanel({
   onSection?: (s: { label: string; desc: string } | null) => void;
   /** Flash a message in SYS.DESC after Cmd+C copy. */
   onCopyFlash?: (msg: string) => void;
+  /** Reports the active hex ID when a recording is expanded/collapsed. */
+  onActiveHexIdChange?: (hexId: string | null) => void;
 }) {
   const [expanded, setExpanded] = useState<number | null>(null);
   // Defer the (heavy) card list until the panel-switch animation settles, so
@@ -513,7 +516,9 @@ export function HistoryPanel({
     setConfirmDel(null);
     setWarnFor(null);
     setTab("text");
-  }, [expanded]);
+    const item = expanded != null ? (history ?? []).find((h) => h.id === expanded) : null;
+    onActiveHexIdChange?.(item?.hexId ?? null);
+  }, [expanded, history, onActiveHexIdChange]);
 
   // Cancel delete confirmation on click outside the delete button.
   useEffect(() => {
@@ -575,12 +580,14 @@ export function HistoryPanel({
       window.clearTimeout(copyTref.current);
       copyTref.current = window.setTimeout(() => setCopied(null), 1100);
 
-      const flashMsg =
+      const baseMsg =
         effTab === "stamps"
           ? t("history.copiedTimestamps")
           : effTab === "speakers"
             ? t("history.copiedSpeakerLabels")
             : t("history.copiedPlainText");
+      const hexId = item.hexId;
+      const flashMsg = hexId ? `${baseMsg} FROM VX-0x${hexId}` : baseMsg;
       onCopyFlashRef.current?.(flashMsg);
     };
 

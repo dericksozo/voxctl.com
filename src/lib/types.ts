@@ -128,6 +128,9 @@ export interface HistoryItem {
   hasWordStamps: boolean;
   /** Whether speaker info exists — segments or word-level labels (gates SPEAKERS tab). */
   hasSpeakers: boolean;
+  /** 4-char random hex ID (e.g. "A7F3") generated at recording start.
+   *  Rendered as VX-0x{hexId} in the UI. Absent for pre-existing recordings. */
+  hexId?: string;
 }
 
 /** Lazily-fetched structured detail for one recording (the arrays the list omits). */
