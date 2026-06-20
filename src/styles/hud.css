@@ -26,13 +26,11 @@ body {
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
   user-select: none;
+  -webkit-user-select: none;
+  pointer-events: none;
 }
 #hud-root {
-  height: 100dvh;
   display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  padding-bottom: 6px;
 }
 
 .hud {
@@ -53,6 +51,8 @@ body {
   height: 19px;
   flex: none;
   display: block;
+  user-select: none;
+  -webkit-user-select: none;
 }
 @keyframes blink {
   0%,
