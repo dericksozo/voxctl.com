@@ -109,6 +109,34 @@ is best-effort via the Accessibility API and degrades to app-only when a URL can
 Release builds are leaner (minified webview, no StrictMode double-render, no HMR socket).
 Idle uses no microphone and opens no audio stream.
 
+## Debug logging
+
+VOXCTL can capture raw xAI Grok STT WebSocket traces as JSONL files for
+troubleshooting transcription issues (duplication, missing text, etc.).
+
+```bash
+# Enable session logging (off by default):
+VOXCTL_LOG_SESSIONS=1 npm run tauri dev
+
+# Also enable verbose stderr WS event dump:
+VOXCTL_LOG_SESSIONS=1 VOXCTL_WS_DEBUG=1 npm run tauri dev
+```
+
+Logs land in `notes/raw-logs/recording-{id}-{hex_id}.jsonl`. Each file contains:
+
+| line type | description |
+|---|---|
+| `session_start` | recording metadata (id, hex_id, model, URL, sample rate, options) |
+| raw WS events | every `transcript.created`, `transcript.partial`, `transcript.done` |
+| `acc_snapshot` | accumulator state at each sink fire (committed count, joined chars, full text) |
+| `session_end` / `session_error` | final transcript text and char count, or error details |
+
+The `acc_snapshot` lines are the fastest way to spot duplication — if `joined_chars`
+suddenly doubles and `joined` contains repeated text, the duplicate threshold is
+visible at a glance.
+
+To disable logging, omit the env var: `npm run tauri dev`
+
 ## Testing
 
 - `cd src-tauri && cargo test` — resampling, dB mapping, WAV round-trip, history CRUD, mode

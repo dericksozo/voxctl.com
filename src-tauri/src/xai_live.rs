@@ -12,6 +12,7 @@
 //! We stream the same 24 kHz PCM16 the capture forwarder already produces and
 //! tell the server `sample_rate=24000`, so no extra resampling is needed.
 
+use std::io::Write;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -35,15 +36,20 @@ const READ_TIMEOUT: Duration = Duration::from_secs(45);
 /// Open a live xAI transcription session. Audio is pushed via the returned
 /// session's `sender()`; the final transcript is awaited with `finish()`. `sink`,
 /// when set, persists partial transcripts mid-capture for crash recovery.
+/// `log_path`, when set (gated by `VOXCTL_LOG_SESSIONS` env var), writes every
+/// WS event + accumulator snapshots as JSONL for debugging.
 pub fn open_session(
     key: String,
     opts: TranscribeOptions,
     sink: Option<TranscriptSink>,
+    log_path: Option<String>,
+    recording_id: i64,
+    hex_id: String,
 ) -> RealtimeSession {
     let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Vec<i16>>();
     let (done_tx, done_rx) = oneshot::channel::<Result<TranscriptOutput, String>>();
     tauri::async_runtime::spawn(async move {
-        let result = run_session(&key, &opts, audio_rx, sink).await;
+        let result = run_session(&key, &opts, audio_rx, sink, log_path.as_deref(), recording_id, &hex_id).await;
         let _ = done_tx.send(result);
     });
     RealtimeSession::from_parts(audio_tx, done_rx)
@@ -195,6 +201,7 @@ fn handle_frame(
     acc: &mut Accumulator,
     sink: Option<&TranscriptSink>,
     debug: bool,
+    log_lines: &mut Vec<String>,
 ) -> Result<Flow, String> {
     let msg = match frame {
         Some(Ok(m)) => m,
@@ -210,6 +217,7 @@ fn handle_frame(
     let Ok(v) = serde_json::from_str::<Value>(txt) else {
         return Ok(Flow::Continue);
     };
+    log_lines.push(txt.to_string());
     if debug {
         eprintln!("EVENT {txt}");
     }
@@ -228,6 +236,10 @@ fn handle_frame(
                 if let Some(s) = sink {
                     s(&acc.joined());
                 }
+                let joined = acc.joined();
+                log_lines.push(
+                    json!({ "type": "acc_snapshot", "committed": acc.committed.len(), "joined_chars": joined.len(), "joined": joined }).to_string(),
+                );
             }
             Ok(Flow::Continue)
         }
@@ -237,6 +249,10 @@ fn handle_frame(
             if let Some(s) = sink {
                 s(&acc.joined());
             }
+            let joined = acc.joined();
+            log_lines.push(
+                json!({ "type": "acc_snapshot", "committed": acc.committed.len(), "joined_chars": joined.len(), "joined": joined }).to_string(),
+            );
             Ok(Flow::Done)
         }
         "error" => {
@@ -276,6 +292,9 @@ async fn run_session(
     opts: &TranscribeOptions,
     mut audio_rx: mpsc::UnboundedReceiver<Vec<i16>>,
     sink: Option<TranscriptSink>,
+    log_path: Option<&str>,
+    recording_id: i64,
+    hex_id: &str,
 ) -> Result<TranscriptOutput, String> {
     let mut req = build_url(opts)
         .into_client_request()
@@ -292,6 +311,31 @@ async fn run_session(
         .map_err(|e| format!("xai websocket connect failed: {e}"))?;
     let (mut write, mut read) = ws.split();
 
+    // Open a JSONL log file if a path was provided. We collect events in
+    // memory during the session and flush on completion so a single write
+    // captures the full trace (avoids interleaved partial lines on crash).
+    let mut log_lines: Vec<String> = Vec::new();
+    if let Some(p) = log_path {
+        let url = build_url(opts);
+        let header = json!({
+            "type": "session_start",
+            "recording_id": recording_id,
+            "hex_id": hex_id,
+            "model": "grok-stt-live",
+            "url": url,
+            "sample_rate": SAMPLE_RATE,
+            "language": opts.language,
+            "diarization": opts.diarization,
+            "multichannel": opts.multichannel,
+            "keywords": opts.keywords,
+        });
+        log_lines.push(header.to_string());
+        // Ensure the parent directory exists.
+        if let Some(parent) = std::path::Path::new(p).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+
     let mut acc = Accumulator::default();
     // Read the debug-dump env var once per session, not once per WS frame (§3.3).
     let ws_debug = std::env::var("VOXCTL_WS_DEBUG").is_ok();
@@ -302,7 +346,8 @@ async fn run_session(
             maybe = audio_rx.recv() => match maybe {
                 Some(chunk) if !chunk.is_empty() => {
                     if let Err(e) = write.send(Message::Binary(pcm16_le(&chunk))).await {
-                        return best_available_on_close(&mut write, acc.final_output(), format!("xai send audio: {e}")).await;
+                        let result = best_available_on_close(&mut write, acc.final_output(), format!("xai send audio: {e}")).await;
+                        return finish_and_log(result, log_path, &mut log_lines);
                     }
                 }
                 Some(_) => {}
@@ -312,21 +357,23 @@ async fn run_session(
                         .send(Message::Text(json!({ "type": "audio.done" }).to_string()))
                         .await
                     {
-                        return best_available_on_close(&mut write, acc.final_output(), format!("xai send audio.done: {e}")).await;
+                        let result = best_available_on_close(&mut write, acc.final_output(), format!("xai send audio.done: {e}")).await;
+                        return finish_and_log(result, log_path, &mut log_lines);
                     }
                     break;
                 }
             },
             frame = read.next() => {
-                match handle_frame(frame, &mut acc, sink.as_ref(), ws_debug) {
+                match handle_frame(frame, &mut acc, sink.as_ref(), ws_debug, &mut log_lines) {
                     Ok(Flow::Done) => {
                         let _ = write.send(Message::Close(None)).await;
-                        return Ok(acc.final_output());
+                        return finish_and_log(Ok(acc.final_output()), log_path, &mut log_lines);
                     }
-                    Ok(Flow::Closed) => return Ok(acc.final_output()),
+                    Ok(Flow::Closed) => return finish_and_log(Ok(acc.final_output()), log_path, &mut log_lines),
                     Ok(Flow::Continue) => {}
                     Err(e) => {
-                        return best_available_on_close(&mut write, acc.final_output(), e).await;
+                        let result = best_available_on_close(&mut write, acc.final_output(), e).await;
+                        return finish_and_log(result, log_path, &mut log_lines);
                     }
                 }
             }
@@ -338,7 +385,7 @@ async fn run_session(
     // after a short grace period over keeping the user in "processing".
     let grace = async {
         loop {
-            match handle_frame(read.next().await, &mut acc, sink.as_ref(), ws_debug)? {
+            match handle_frame(read.next().await, &mut acc, sink.as_ref(), ws_debug, &mut log_lines)? {
                 Flow::Done | Flow::Closed => {
                     return Ok::<TranscriptOutput, String>(acc.final_output())
                 }
@@ -356,7 +403,7 @@ async fn run_session(
             } else {
                 let drain = async {
                     loop {
-                        match handle_frame(read.next().await, &mut acc, sink.as_ref(), ws_debug)? {
+                        match handle_frame(read.next().await, &mut acc, sink.as_ref(), ws_debug, &mut log_lines)? {
                             Flow::Done | Flow::Closed => {
                                 return Ok::<TranscriptOutput, String>(acc.final_output())
                             }
@@ -378,7 +425,7 @@ async fn run_session(
     let _ = write.send(Message::Close(None)).await;
     // A WebSocket failure while finalizing shouldn't discard a transcript we
     // already produced; fall back to the best-available text.
-    match result {
+    let final_result = match result {
         Ok(out) => Ok(out),
         Err(e) => {
             let out = acc.final_output();
@@ -389,7 +436,34 @@ async fn run_session(
                 Ok(out)
             }
         }
+    };
+    finish_and_log(final_result, log_path, &mut log_lines)
+}
+
+/// Write the session transcript log to disk as JSONL: one header line, each WS
+/// event on its own line, and a final result line. Returns the result unchanged.
+fn finish_and_log(
+    result: Result<TranscriptOutput, String>,
+    log_path: Option<&str>,
+    log_lines: &mut Vec<String>,
+) -> Result<TranscriptOutput, String> {
+    if let Some(p) = log_path {
+        let out = match &result {
+            Ok(o) => json!({ "type": "session_end", "text": o.text, "chars": o.text.len() }),
+            Err(e) => json!({ "type": "session_error", "error": e }),
+        };
+        log_lines.push(out.to_string());
+        match std::fs::File::create(p) {
+            Ok(mut f) => {
+                for line in log_lines {
+                    let _ = writeln!(f, "{line}");
+                }
+                log::info!("xai session log written: {p}");
+            }
+            Err(e) => log::error!("xai session log write failed ({p}): {e}"),
+        }
     }
+    result
 }
 
 #[cfg(test)]
@@ -511,7 +585,7 @@ mod tests {
             word_timestamps: true,
             ..Default::default()
         };
-        let result = rt.block_on(run_session(&key, &opts, rx, None));
+        let result = rt.block_on(run_session(&key, &opts, rx, None, None, 0, "TEST"));
         eprintln!("FINAL: {result:?}");
         assert!(result.is_ok(), "xai live failed: {result:?}");
         let out = result.unwrap();
