@@ -351,11 +351,24 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
             ctx.options.language.clone(),
             Some(partial_transcript_sink(app, recording_id)),
         )),
-        (Some("xai"), Some(key)) => Some(crate::xai_live::open_session(
-            key,
-            ctx.options.clone(),
-            Some(partial_transcript_sink(app, recording_id)),
-        )),
+        (Some("xai"), Some(key)) => {
+            let log_path = if std::env::var("VOXCTL_LOG_SESSIONS").is_ok() {
+                Some(format!(
+                    "../notes/raw-logs/recording-{}-{}.jsonl",
+                    recording_id, hex_id
+                ))
+            } else {
+                None
+            };
+            Some(crate::xai_live::open_session(
+                key,
+                ctx.options.clone(),
+                Some(partial_transcript_sink(app, recording_id)),
+                log_path,
+                recording_id,
+                hex_id.clone(),
+            ))
+        }
         _ => None,
     };
 
