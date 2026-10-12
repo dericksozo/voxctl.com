@@ -92,8 +92,8 @@ pub fn run() {
         .manage(retry::RetryState::default())
         .setup(|app| {
             app.manage(history::init(app.handle())?);
-            // Move any pre-multi-provider OpenAI key to its per-provider account.
-            commands::config::migrate_legacy_openai_key();
+            // Move any pre-combined keychain keys into the single provider blob.
+            commands::config::migrate_legacy_keys();
             setup_tray(app.handle())?;
             shortcut::apply_shortcut(app.handle());
             // Build the recording HUD up front (hidden) so the first record just
@@ -126,7 +126,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::config::get_config,
             commands::config::reload_config,
-            commands::config::has_api_key,
             commands::config::set_api_key,
             commands::config::delete_api_key,
             commands::config::provider_status,
