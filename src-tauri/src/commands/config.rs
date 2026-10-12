@@ -1,6 +1,12 @@
 //! Non-secret settings (read from the shared tauri-plugin-store file) plus the
-//! OpenAI API key, which is kept ONLY in the macOS Keychain — never in plaintext
+//! provider API keys, which are kept ONLY in the macOS Keychain — never in plaintext
 //! config and never handed to the webview.
+//!
+//! Every keychain read here is non-interactive (see `crate::keychain`), so nothing
+//! on the launch path can raise the macOS login-password dialog. The login keychain
+//! is ad-hoc-signed-bound, so after a rebuild a previously stored item may be
+//! `Blocked` (access denied without a prompt); the UI then shows the key as not
+//! stored and the user re-adds it, which recreates the item under the new build.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -9,13 +15,9 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
+use crate::keychain::{self, Access};
+
 pub const STORE_FILE: &str = "settings.json";
-const KEYRING_SERVICE: &str = "com.derick.voxctlcom";
-/// Single keychain account holding EVERY provider key as one JSON blob. One item
-/// means one authorization prompt on launch instead of one per provider (§1.4).
-const KEYCHAIN_ACCOUNT: &str = "voxctl.keys";
-/// Pre-multi-provider OpenAI key account, migrated into the combined blob on launch.
-const LEGACY_OPENAI_USER: &str = "openai_api_key";
 /// Providers VOXCTL stores keys for. Mirrors the registry's `keychainAccount`
 /// values (`voxctl.<id>`); kept here so key storage never depends on the
 /// registry being loadable.
@@ -95,15 +97,10 @@ fn account(provider: &str) -> Result<String, String> {
     }
 }
 
-/// The single keychain entry that holds every provider key as one JSON blob.
-fn all_keys_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYRING_SERVICE, KEYCHAIN_ACCOUNT).map_err(|e| e.to_string())
-}
-
 /// In-memory cache of provider keys so record-start (and every transcribe) never
-/// hits the Keychain on the hot path (§1.4). Maps provider → Some(key) when
-/// present / None when known-absent. Invalidated on every set/clear so it can
-/// never serve a stale or removed key.
+/// hits the Keychain on the hot path. Maps provider → `Some(key)` when present /
+/// `None` when known-absent. Invalidated on every set/clear so it can never serve
+/// a stale or removed key.
 static KEY_CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
 
 fn key_cache() -> &'static Mutex<HashMap<String, Option<String>>> {
@@ -116,29 +113,23 @@ fn invalidate_key_cache(provider: &str) {
     }
 }
 
-/// Read every stored key from the keychain in a single round-trip, decoding the
-/// JSON blob. Missing/malformed blobs decode to an empty map (absent = "none").
-fn load_all_keys() -> HashMap<String, String> {
-    all_keys_entry()
+/// Snapshot the cache if `provider` is already resolved.
+fn cached(provider: &str) -> Option<Option<String>> {
+    key_cache()
+        .lock()
         .ok()
-        .and_then(|e| e.get_password().ok())
-        .and_then(|s| serde_json::from_str::<HashMap<String, String>>(&s).ok())
-        .unwrap_or_default()
+        .and_then(|m| m.get(provider).cloned())
 }
 
-/// Write the full provider-key map back into the single keychain item.
-fn write_all_keys(all: &HashMap<String, String>) -> Result<(), String> {
-    let json = serde_json::to_string(all).map_err(|e| e.to_string())?;
-    all_keys_entry()?
-        .set_password(&json)
-        .map_err(|e| e.to_string())
-}
-
-/// Load the combined blob once and warm the in-memory cache with every provider's
-/// key (or None when absent). This is the ONE keychain read startup performs;
-/// the rest of the session is served from memory.
-fn refresh_keys() -> HashMap<String, String> {
-    let all = load_all_keys();
+/// Read + decode the combined blob once and replace the cache with its contents
+/// (exactly the providers stored are `Some`; everyone else is `None`). Never
+/// prompts — a `Blocked` read caches everyone as absent, so the UI honestly shows
+/// "no key stored" rather than blocking on a dialog.
+fn load_into_cache() -> HashMap<String, String> {
+    let all = match keychain::read_blob() {
+        Access::Found(map) => map,
+        Access::Absent | Access::Blocked => HashMap::new(),
+    };
     if let Ok(mut m) = key_cache().lock() {
         for p in PROVIDERS {
             m.insert(p.to_string(), all.get(p).cloned());
@@ -150,7 +141,8 @@ fn refresh_keys() -> HashMap<String, String> {
 /// Per-provider key status for the UI: "validated" (green) when a key is stored,
 /// "none" otherwise. Invalid keys are rejected at entry and never stored, so
 /// "invalid (red)" is surfaced transiently from the `set_api_key` error rather
-/// than as a persistent state here.
+/// than as a persistent state here. This is a non-interactive read, so it is safe
+/// to call on launch (it will not raise a keychain dialog).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderStatus {
@@ -161,13 +153,12 @@ pub struct ProviderStatus {
 
 #[tauri::command]
 pub async fn provider_status() -> ProviderStatus {
-    // A single Keychain round-trip now serves all three providers; on the main
-    // thread (Tauri v2 default for non-async commands) a slow Keychain could
-    // still freeze the UI, so keep it on the blocking pool (§4.2).
+    // A single non-interactive Keychain round-trip serves all three providers;
+    // keep it on the blocking pool so a slow Keychain can never freeze the UI.
     tauri::async_runtime::spawn_blocking(|| {
-        let all = refresh_keys();
+        let all = load_into_cache();
         let s = |p: &str| {
-            if all.get(p).is_some() {
+            if all.contains_key(p) {
                 "validated".to_string()
             } else {
                 "none".to_string()
@@ -237,15 +228,54 @@ async fn validate(provider: &str, key: &str) -> Result<(), String> {
 }
 
 /// Remove a provider's stored key from the combined blob, treating "no key
-/// present" as success.
+/// present" as success. Called only from user-initiated flows (save/delete), so
+/// reading the true current contents may show one keychain dialog.
 fn clear_key(provider: &str) {
-    let mut all = load_all_keys();
+    let mut all = match keychain::read_blob_interactive() {
+        Access::Found(map) => map,
+        Access::Absent | Access::Blocked => HashMap::new(),
+    };
     if all.remove(provider).is_some() {
-        if let Err(e) = write_all_keys(&all) {
+        if let Err(e) = keychain::write_blob(&all) {
             log::warn!("failed clearing {provider} key: {e}");
         }
     }
     invalidate_key_cache(provider);
+}
+
+/// One-time migration of pre-combined keychain layouts into the single
+/// `voxctl.keys` blob: the pre-multi-provider `openai_api_key` account and the
+/// per-provider `voxctl.<id>` accounts. Non-interactive: if the combined blob
+/// already exists, or the probe is blocked (stale build identity), this is a
+/// no-op. Runs on the first explicit key action, never during startup.
+fn migrate_legacy_keys() {
+    // Stop early when the combined blob already exists (or is unreadable).
+    if let Access::Found(_) = keychain::read_blob() {
+        return;
+    }
+    let mut all: HashMap<String, String> = HashMap::new();
+    for p in PROVIDERS {
+        let acct = format!("voxctl.{p}");
+        if let Access::Found(k) = keychain::read_account(&acct) {
+            all.insert(p.to_string(), k);
+        }
+    }
+    if let Access::Found(k) = keychain::read_account(keychain::LEGACY_OPENAI_USER) {
+        all.entry("openai".to_string()).or_insert(k);
+    }
+    if all.is_empty() {
+        return;
+    }
+    if keychain::write_blob(&all).is_ok() {
+        for p in PROVIDERS {
+            keychain::delete_account(&format!("voxctl.{p}"));
+        }
+        keychain::delete_account(keychain::LEGACY_OPENAI_USER);
+        log::info!(
+            "migrated legacy provider keys into {}",
+            keychain::KEYCHAIN_ACCOUNT
+        );
+    }
 }
 
 /// Validate the key against its provider, then store it in the Keychain ONLY if
@@ -255,6 +285,9 @@ fn clear_key(provider: &str) {
 /// key for that provider, so the UI never keeps showing "validated" for a key
 /// the user just replaced with a bad one. Transient "unreachable" failures
 /// leave the existing key untouched.
+///
+/// This is an explicit user gesture, so it is the one place a keychain dialog is
+/// allowed (macOS may ask to authorise the write for a freshly built binary).
 #[tauri::command]
 pub async fn set_api_key(provider: String, key: String) -> Result<(), String> {
     account(&provider)?; // reject unknown providers
@@ -268,10 +301,14 @@ pub async fn set_api_key(provider: String, key: String) -> Result<(), String> {
         }
         return Err(e);
     }
-    // Read-modify-write the single combined blob.
-    let mut all = load_all_keys();
+    // Migrate any pre-combined layout once, before the read-modify-write.
+    migrate_legacy_keys();
+    let mut all = match keychain::read_blob_interactive() {
+        Access::Found(map) => map,
+        Access::Absent | Access::Blocked => HashMap::new(),
+    };
     all.insert(provider.clone(), key);
-    write_all_keys(&all)?;
+    keychain::write_blob(&all)?;
     invalidate_key_cache(&provider);
     Ok(())
 }
@@ -284,57 +321,14 @@ pub fn delete_api_key(provider: String) -> Result<(), String> {
 }
 
 /// Internal accessor for the transcription layer. Stays in Rust. Serves from the
-/// in-memory cache when warm so record-start avoids the Keychain syscall (§1.4).
+/// in-memory cache when solved so record-start avoids the Keychain syscall; a cold
+/// cache is warmed with a single non-interactive read (never prompts).
 pub fn get_api_key(provider: &str) -> Option<String> {
-    if let Ok(m) = key_cache().lock() {
-        if let Some(cached) = m.get(provider) {
-            return cached.clone();
-        }
+    if let Some(v) = cached(provider) {
+        return v;
     }
-    refresh_keys().get(provider).cloned()
-}
-
-/// One-time migration of pre-combined keychain layouts into the single
-/// `voxctl.keys` blob: the pre-multi-provider `openai_api_key` account and the
-/// per-provider `voxctl.<id>` accounts. No-op when the blob already exists or no
-/// legacy keys are present. Reads a few items once, writes the blob, then cleans
-/// up the old items.
-pub fn migrate_legacy_keys() {
-    let Ok(entry) = all_keys_entry() else {
-        return;
-    };
-    if entry.get_password().is_ok() {
-        return;
-    }
-    let mut all: HashMap<String, String> = HashMap::new();
-    for p in PROVIDERS {
-        let account = format!("voxctl.{p}");
-        if let Ok(e) = keyring::Entry::new(KEYRING_SERVICE, &account) {
-            if let Ok(k) = e.get_password() {
-                all.insert(p.to_string(), k);
-            }
-        }
-    }
-    if let Ok(legacy) = keyring::Entry::new(KEYRING_SERVICE, LEGACY_OPENAI_USER) {
-        if let Ok(k) = legacy.get_password() {
-            all.entry("openai".to_string()).or_insert(k);
-        }
-    }
-    if all.is_empty() {
-        return;
-    }
-    if write_all_keys(&all).is_ok() {
-        for p in PROVIDERS {
-            let account = format!("voxctl.{p}");
-            if let Ok(e) = keyring::Entry::new(KEYRING_SERVICE, &account) {
-                let _ = e.delete_credential();
-            }
-        }
-        if let Ok(legacy) = keyring::Entry::new(KEYRING_SERVICE, LEGACY_OPENAI_USER) {
-            let _ = legacy.delete_credential();
-        }
-        log::info!("migrated legacy provider keys into voxctl.keys");
-    }
+    load_into_cache();
+    cached(provider).flatten()
 }
 
 #[cfg(test)]

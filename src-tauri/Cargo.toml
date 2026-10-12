@@ -30,7 +30,11 @@ log = "0.4"
 env_logger = "0.11"
 
 # Secure storage of the OpenAI key in the macOS Keychain (never plaintext).
+# `keyring` holds the item; `security-framework` gives us the process-wide
+# "user interaction allowed" switch used to make launch-time reads non-interactive
+# (see `keychain.rs`). Both bind to the Apple Security framework.
 keyring = { version = "3", features = ["apple-native"] }
+security-framework = "3"
 
 # Lightweight HTTPS for zero-cost API-key validation (GET /v1/models) and the
 # remote model-registry fetch (JSON). rustls only (no OpenSSL), reusing the

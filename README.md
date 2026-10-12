@@ -59,6 +59,26 @@ Then relaunch VOXCTL and re-grant. In System Settings → Privacy & Security →
 Accessibility, if a "VOXCTL" row is already checked but the app still isn't trusted,
 remove that row (select it, press the minus/`-` button) and re-add it.
 
+### API keys and the login keychain
+
+Provider API keys live in one macOS Keychain item (`com.derick.voxctlcom` /
+`voxctl.keys`). VOXCTL never reads it interactively during startup: every launch-time
+lookup is non-interactive, so launching the app (or checking key status) can never
+raise the "wants to use your login keychain" dialog. A keychain dialog is only ever
+shown by an explicit **Save key** / **Delete key** action.
+
+Because this build is ad-hoc signed, the item's own ACL is bound to a `cdhash` that
+changes on every build. After a rebuild the previously stored key may be unreadable
+without re-authorisation; VOXCTL treats that as "no key stored" (rather than popping a
+dialog) and you re-add the key once in Settings → Providers, which recreates the item
+under the new build. Signing the app with a stable identity removes this step.
+
+If you want to clear the stored key manually:
+
+```bash
+security delete-generic-password -s com.derick.voxctlcom -a voxctl.keys
+```
+
 ## How it works (architecture)
 
 Everything heavy lives in **Rust**; the webview only renders UI and listens to events.
