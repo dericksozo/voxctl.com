@@ -19,8 +19,6 @@ export const getRegistry = () => invoke<Registry>("get_registry");
 export const refreshRegistry = () => invoke<Registry>("refresh_registry");
 
 // --- Per-provider API keys (macOS Keychain, Rust-owned) ---
-export const hasApiKey = (provider: ProviderId) =>
-  invoke<boolean>("has_api_key", { provider });
 export const setApiKey = (provider: ProviderId, key: string) =>
   invoke<void>("set_api_key", { provider, key });
 export const deleteApiKey = (provider: ProviderId) =>

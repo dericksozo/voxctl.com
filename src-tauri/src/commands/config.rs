@@ -11,7 +11,10 @@ use tauri_plugin_store::StoreExt;
 
 pub const STORE_FILE: &str = "settings.json";
 const KEYRING_SERVICE: &str = "com.derick.voxctlcom";
-/// Pre-multi-provider OpenAI key account, migrated to `voxctl.openai` on launch.
+/// Single keychain account holding EVERY provider key as one JSON blob. One item
+/// means one authorization prompt on launch instead of one per provider (§1.4).
+const KEYCHAIN_ACCOUNT: &str = "voxctl.keys";
+/// Pre-multi-provider OpenAI key account, migrated into the combined blob on launch.
 const LEGACY_OPENAI_USER: &str = "openai_api_key";
 /// Providers VOXCTL stores keys for. Mirrors the registry's `keychainAccount`
 /// values (`voxctl.<id>`); kept here so key storage never depends on the
@@ -86,7 +89,8 @@ pub fn reload_config(app: AppHandle) {
     crate::shortcut::apply_shortcut(&app);
 }
 
-/// Keychain account a provider's key lives under (`voxctl.<provider>`).
+/// Keychain account a provider's key lives under (`voxctl.<provider>`). Retained
+/// only to validate provider names and to migrate pre-combined per-provider items.
 fn account(provider: &str) -> Result<String, String> {
     if PROVIDERS.contains(&provider) {
         Ok(format!("voxctl.{provider}"))
@@ -95,8 +99,9 @@ fn account(provider: &str) -> Result<String, String> {
     }
 }
 
-fn entry(provider: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYRING_SERVICE, &account(provider)?).map_err(|e| e.to_string())
+/// The single keychain entry that holds every provider key as one JSON blob.
+fn all_keys_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(KEYRING_SERVICE, KEYCHAIN_ACCOUNT).map_err(|e| e.to_string())
 }
 
 /// In-memory cache of provider keys so record-start (and every transcribe) never
@@ -115,17 +120,35 @@ fn invalidate_key_cache(provider: &str) {
     }
 }
 
-/// True when a (previously validated) key is stored for the provider. Because we
-/// only ever store validated keys, "present" is equivalent to "validated".
-fn key_present(provider: &str) -> bool {
-    entry(provider)
-        .and_then(|e| e.get_password().map_err(|x| x.to_string()))
-        .is_ok()
+/// Read every stored key from the keychain in a single round-trip, decoding the
+/// JSON blob. Missing/malformed blobs decode to an empty map (absent = "none").
+fn load_all_keys() -> HashMap<String, String> {
+    all_keys_entry()
+        .ok()
+        .and_then(|e| e.get_password().ok())
+        .and_then(|s| serde_json::from_str::<HashMap<String, String>>(&s).ok())
+        .unwrap_or_default()
 }
 
-#[tauri::command]
-pub fn has_api_key(provider: String) -> bool {
-    key_present(&provider)
+/// Write the full provider-key map back into the single keychain item.
+fn write_all_keys(all: &HashMap<String, String>) -> Result<(), String> {
+    let json = serde_json::to_string(all).map_err(|e| e.to_string())?;
+    all_keys_entry()?
+        .set_password(&json)
+        .map_err(|e| e.to_string())
+}
+
+/// Load the combined blob once and warm the in-memory cache with every provider's
+/// key (or None when absent). This is the ONE keychain read startup performs;
+/// the rest of the session is served from memory.
+fn refresh_keys() -> HashMap<String, String> {
+    let all = load_all_keys();
+    if let Ok(mut m) = key_cache().lock() {
+        for p in PROVIDERS {
+            m.insert(p.to_string(), all.get(p).cloned());
+        }
+    }
+    all
 }
 
 /// Per-provider key status for the UI: "validated" (green) when a key is stored,
@@ -142,11 +165,13 @@ pub struct ProviderStatus {
 
 #[tauri::command]
 pub async fn provider_status() -> ProviderStatus {
-    // Three Keychain round-trips; on the main thread (Tauri v2 default for non-async
-    // commands) a slow Keychain could freeze the UI. Run on the blocking pool (§4.2).
+    // A single Keychain round-trip now serves all three providers; on the main
+    // thread (Tauri v2 default for non-async commands) a slow Keychain could
+    // still freeze the UI, so keep it on the blocking pool (§4.2).
     tauri::async_runtime::spawn_blocking(|| {
+        let all = refresh_keys();
         let s = |p: &str| {
-            if key_present(p) {
+            if all.get(p).is_some() {
                 "validated".to_string()
             } else {
                 "none".to_string()
@@ -215,12 +240,13 @@ async fn validate(provider: &str, key: &str) -> Result<(), String> {
     }
 }
 
-/// Remove a provider's stored key, treating "no key present" as success.
+/// Remove a provider's stored key from the combined blob, treating "no key
+/// present" as success.
 fn clear_key(provider: &str) {
-    if let Ok(en) = entry(provider) {
-        match en.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => {}
-            Err(e) => log::warn!("failed clearing {provider} key: {e}"),
+    let mut all = load_all_keys();
+    if all.remove(provider).is_some() {
+        if let Err(e) = write_all_keys(&all) {
+            log::warn!("failed clearing {provider} key: {e}");
         }
     }
     invalidate_key_cache(provider);
@@ -235,6 +261,7 @@ fn clear_key(provider: &str) {
 /// leave the existing key untouched.
 #[tauri::command]
 pub async fn set_api_key(provider: String, key: String) -> Result<(), String> {
+    account(&provider)?; // reject unknown providers
     let key = key.trim().to_string();
     if key.is_empty() {
         return Err("empty key".into());
@@ -245,9 +272,10 @@ pub async fn set_api_key(provider: String, key: String) -> Result<(), String> {
         }
         return Err(e);
     }
-    entry(&provider)?
-        .set_password(&key)
-        .map_err(|e| e.to_string())?;
+    // Read-modify-write the single combined blob.
+    let mut all = load_all_keys();
+    all.insert(provider.clone(), key);
+    write_all_keys(&all)?;
     invalidate_key_cache(&provider);
     Ok(())
 }
@@ -267,31 +295,49 @@ pub fn get_api_key(provider: &str) -> Option<String> {
             return cached.clone();
         }
     }
-    let key = entry(provider).ok().and_then(|e| e.get_password().ok());
-    if let Ok(mut m) = key_cache().lock() {
-        m.insert(provider.to_string(), key.clone());
-    }
-    key
+    refresh_keys().get(provider).cloned()
 }
 
-/// One-time migration of the pre-multi-provider OpenAI key (keychain user
-/// `openai_api_key`) into the new per-provider account `voxctl.openai`. No-op
-/// when the new account already has a key or the legacy one is absent.
-pub fn migrate_legacy_openai_key() {
-    let Ok(new_entry) = entry("openai") else {
+/// One-time migration of pre-combined keychain layouts into the single
+/// `voxctl.keys` blob: the pre-multi-provider `openai_api_key` account and the
+/// per-provider `voxctl.<id>` accounts. No-op when the blob already exists or no
+/// legacy keys are present. Reads a few items once, writes the blob, then cleans
+/// up the old items.
+pub fn migrate_legacy_keys() {
+    let Ok(entry) = all_keys_entry() else {
         return;
     };
-    if new_entry.get_password().is_ok() {
+    if entry.get_password().is_ok() {
         return;
     }
-    let Ok(legacy) = keyring::Entry::new(KEYRING_SERVICE, LEGACY_OPENAI_USER) else {
-        return;
-    };
-    if let Ok(key) = legacy.get_password() {
-        if new_entry.set_password(&key).is_ok() {
-            let _ = legacy.delete_credential();
-            log::info!("migrated legacy OpenAI key to voxctl.openai");
+    let mut all: HashMap<String, String> = HashMap::new();
+    for p in PROVIDERS {
+        let account = format!("voxctl.{p}");
+        if let Ok(e) = keyring::Entry::new(KEYRING_SERVICE, &account) {
+            if let Ok(k) = e.get_password() {
+                all.insert(p.to_string(), k);
+            }
         }
+    }
+    if let Ok(legacy) = keyring::Entry::new(KEYRING_SERVICE, LEGACY_OPENAI_USER) {
+        if let Ok(k) = legacy.get_password() {
+            all.entry("openai".to_string()).or_insert(k);
+        }
+    }
+    if all.is_empty() {
+        return;
+    }
+    if write_all_keys(&all).is_ok() {
+        for p in PROVIDERS {
+            let account = format!("voxctl.{p}");
+            if let Ok(e) = keyring::Entry::new(KEYRING_SERVICE, &account) {
+                let _ = e.delete_credential();
+            }
+        }
+        if let Ok(legacy) = keyring::Entry::new(KEYRING_SERVICE, LEGACY_OPENAI_USER) {
+            let _ = legacy.delete_credential();
+        }
+        log::info!("migrated legacy provider keys into voxctl.keys");
     }
 }
 
@@ -309,7 +355,6 @@ mod tests {
     #[test]
     fn unknown_provider_is_rejected() {
         assert!(account("anthropic").is_err());
-        assert!(entry("nope").is_err());
     }
 
     /// Live check that each provider's free validation endpoint accepts a real
