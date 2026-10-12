@@ -7,6 +7,7 @@ mod events;
 mod file_transcribe;
 mod history;
 mod hud;
+mod keychain;
 mod lang_detect;
 mod platform;
 mod registry;
@@ -92,8 +93,11 @@ pub fn run() {
         .manage(retry::RetryState::default())
         .setup(|app| {
             app.manage(history::init(app.handle())?);
-            // Move any pre-combined keychain keys into the single provider blob.
-            commands::config::migrate_legacy_keys();
+            // NOTE: keychain migration is deliberately NOT run here. Any keychain
+            // access during `.setup()` happens before the UI is presented and can
+            // raise the macOS login-password dialog over a blank window. All
+            // startup keychain reads are non-interactive (see `keychain.rs`) and
+            // migration runs lazily on the first explicit key action.
             setup_tray(app.handle())?;
             shortcut::apply_shortcut(app.handle());
             // Build the recording HUD up front (hidden) so the first record just
