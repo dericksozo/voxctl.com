@@ -559,38 +559,6 @@ pub fn set_language(app: &AppHandle, language: Option<String>) {
     inner.language = language;
 }
 
-/// Briefly open an input stream to trigger the macOS microphone (TCC) prompt
-/// when permission is undetermined. Used by onboarding.
-pub fn trigger_mic_prompt() {
-    let host = cpal::default_host();
-    let Some(device) = host.default_input_device() else {
-        return;
-    };
-    let Ok(supported) = device.default_input_config() else {
-        return;
-    };
-    let fmt = supported.sample_format();
-    let config: cpal::StreamConfig = supported.into();
-    let err_fn = |_| {};
-    let stream = match fmt {
-        SampleFormat::F32 => {
-            device.build_input_stream(&config, move |_: &[f32], _| {}, err_fn, None)
-        }
-        SampleFormat::I16 => {
-            device.build_input_stream(&config, move |_: &[i16], _| {}, err_fn, None)
-        }
-        SampleFormat::U16 => {
-            device.build_input_stream(&config, move |_: &[u16], _| {}, err_fn, None)
-        }
-        _ => return,
-    };
-    if let Ok(stream) = stream {
-        let _ = stream.play();
-        std::thread::sleep(Duration::from_millis(300));
-        drop(stream);
-    }
-}
-
 // ---- commands ----
 
 #[tauri::command]

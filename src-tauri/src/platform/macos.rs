@@ -2,6 +2,18 @@
 //! prompts, and frontmost-app / focused-URL detection for Mode auto-switching.
 
 use accessibility_sys::AXIsProcessTrusted;
+use serde::Serialize;
+
+/// Microphone TCC state. Distinguishing "never asked" from "denied" lets
+/// onboarding show the right remedy instead of re-prompting forever.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MicPermission {
+    NotDetermined,
+    Restricted,
+    Denied,
+    Authorized,
+}
 
 /// True if the app is trusted for the Accessibility API (needed for CGEvent
 /// text injection and reading the focused element / URL).
@@ -25,14 +37,58 @@ pub fn prompt_accessibility() -> bool {
     }
 }
 
-/// Microphone TCC authorization status.
-pub fn microphone_authorized() -> bool {
+/// Microphone TCC authorization status, as a richer enum so the UI can
+/// distinguish "not asked yet" from "denied" from "restricted".
+pub fn microphone_status() -> MicPermission {
     use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio};
+    let Some(media) = (unsafe { AVMediaTypeAudio }) else {
+        return MicPermission::NotDetermined;
+    };
+    let status = unsafe { AVCaptureDevice::authorizationStatusForMediaType(media) };
+    if status == AVAuthorizationStatus::Authorized {
+        MicPermission::Authorized
+    } else if status == AVAuthorizationStatus::Denied {
+        MicPermission::Denied
+    } else if status == AVAuthorizationStatus::Restricted {
+        MicPermission::Restricted
+    } else {
+        MicPermission::NotDetermined
+    }
+}
+
+/// Request microphone access via AVFoundation's canonical prompt (the same TCC
+/// path the status check reads). Returns the resulting status once the user has
+/// answered. When already decided (Authorized/Denied/Restricted) no prompt is
+/// shown and the current status is returned immediately — TCC never re-prompts
+/// after a denial, so a denied state can only be fixed in System Settings.
+pub fn request_microphone_access() -> MicPermission {
+    let status = microphone_status();
+    if status != MicPermission::NotDetermined {
+        return status;
+    }
+
+    use block2::RcBlock;
+    use objc2::runtime::Bool;
+    use objc2_av_foundation::{AVCaptureDevice, AVMediaTypeAudio};
+
+    let Some(media) = (unsafe { AVMediaTypeAudio }) else {
+        return MicPermission::NotDetermined;
+    };
+
+    let (tx, rx) = std::sync::mpsc::channel::<bool>();
+    let block = RcBlock::new(move |granted: Bool| {
+        let _ = tx.send(granted.as_bool());
+    });
     unsafe {
-        let Some(media) = AVMediaTypeAudio else {
-            return false;
-        };
-        AVCaptureDevice::authorizationStatusForMediaType(media) == AVAuthorizationStatus::Authorized
+        AVCaptureDevice::requestAccessForMediaType_completionHandler(media, &block);
+    }
+
+    // The completion handler runs on an arbitrary dispatch queue after the user
+    // answers. The boolean it delivers is the authoritative answer; if it never
+    // arrives (e.g. the dialog was dismissed oddly), fall back to re-reading.
+    match rx.recv_timeout(std::time::Duration::from_secs(120)) {
+        Ok(true) => MicPermission::Authorized,
+        _ => microphone_status(),
     }
 }
 

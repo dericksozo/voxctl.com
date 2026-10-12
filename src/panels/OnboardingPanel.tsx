@@ -47,6 +47,9 @@ export function OnboardingPanel({
   const [err, setErr] = useState<string | null>(null);
 
   const hasKey = anyKeyValidated(providers);
+  const micGranted = perms.microphone === "authorized";
+  // Denied/restricted can only be fixed in System Settings (TCC never re-prompts).
+  const micBlocked = perms.microphone === "denied" || perms.microphone === "restricted";
   const firstValidated = useMemo(
     () => registry?.providers.find((p) => providerValidated(providers, p.id))?.id as ProviderId | undefined,
     [providers, registry],
@@ -64,16 +67,16 @@ export function OnboardingPanel({
     return reentry ? "error" : "waiting";
   }
 
-  const micStatus = statusOf(perms.microphone, busyStep === "mic");
+  const micStatus: StepStatus = micBlocked ? "error" : statusOf(micGranted, busyStep === "mic");
   const accStatus = statusOf(perms.accessibility, busyStep === "acc");
   const keyStatus = statusOf(hasKey, false);
 
-  const doneCount = [perms.microphone, perms.accessibility, hasKey].filter(Boolean).length;
+  const doneCount = [micGranted, perms.accessibility, hasKey].filter(Boolean).length;
   const allDone = doneCount === 3;
 
   const note = !reentry
     ? "FIRST LAUNCH"
-    : !perms.microphone
+    : !micGranted
       ? "RE-ENTRY · MICROPHONE REVOKED"
       : !perms.accessibility
         ? "RE-ENTRY · ACCESSIBILITY REVOKED"
@@ -91,7 +94,12 @@ export function OnboardingPanel({
     setBusyStep("mic");
     setErr(null);
     try {
-      await requestMicrophone();
+      const status = await requestMicrophone();
+      if (status === "denied" || status === "restricted") {
+        setErr(
+          "Microphone access was denied. Open System Settings → Privacy & Security → Microphone and enable VOXCTL, then return.",
+        );
+      }
       refreshPerms();
     } catch (e) {
       setErr(String(e));
@@ -104,7 +112,12 @@ export function OnboardingPanel({
     setBusyStep("acc");
     setErr(null);
     try {
-      await requestAccessibility();
+      const trusted = await requestAccessibility();
+      if (!trusted) {
+        setErr(
+          "Accessibility not granted. If System Settings already lists VOXCTL as enabled, remove the old entry (or toggle it off and on) and try again — macOS may still be trusting a previous copy of the app.",
+        );
+      }
       refreshPerms();
     } catch (e) {
       setErr(String(e));
@@ -144,13 +157,22 @@ export function OnboardingPanel({
             n="1"
             icon={<MicIcon />}
             title="MICROPHONE ACCESS"
-            desc="Required to hear your voice for transcription."
+            desc={
+              micBlocked
+                ? "Permission was denied. Enable VOXCTL in System Settings → Privacy & Security → Microphone."
+                : "Required to hear your voice for transcription."
+            }
             status={micStatus}
             doneLabel="GRANTED"
             action={
               <>
-                <button type="button" className="vx-btn vx-btn--mag" onClick={grantMic} disabled={busyStep !== null}>
-                  {micStatus === "error" ? "RE-GRANT" : "GRANT"}
+                <button
+                  type="button"
+                  className="vx-btn vx-btn--mag"
+                  onClick={grantMic}
+                  disabled={busyStep !== null || micBlocked}
+                >
+                  {micBlocked ? "DENIED" : micStatus === "error" ? "RE-GRANT" : "GRANT"}
                 </button>
                 <button
                   type="button"
@@ -167,7 +189,11 @@ export function OnboardingPanel({
             n="2"
             icon={<KeyboardIcon />}
             title="ACCESSIBILITY ACCESS"
-            desc="Required to type transcribed text into your apps."
+            desc={
+              perms.accessibility
+                ? "Required to type transcribed text into your apps."
+                : "Required to type transcribed text into your apps. If it shows as already enabled, remove the stale VOXCTL entry first."
+            }
             status={accStatus}
             doneLabel="GRANTED"
             action={

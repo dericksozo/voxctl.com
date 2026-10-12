@@ -8,6 +8,7 @@ import type {
   Config,
   HistoryDetail,
   HistoryItem,
+  MicStatus,
   Mode,
   PermissionStatus,
   StorageStats,
@@ -30,7 +31,7 @@ export const providerStatus = () => invoke<ProviderStatus>("provider_status");
 export const getPermissions = () => invoke<PermissionStatus>("get_permissions");
 export const openPermissionSettings = (which: "microphone" | "accessibility") =>
   invoke<void>("open_permission_settings", { which });
-export const requestMicrophone = () => invoke<boolean>("request_microphone");
+export const requestMicrophone = () => invoke<MicStatus>("request_microphone");
 export const requestAccessibility = () => invoke<boolean>("request_accessibility");
 /** Prompt for macOS notification permission (tied to enabling alerts). */
 export const requestNotificationPermission = () =>
