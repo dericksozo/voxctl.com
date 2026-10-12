@@ -236,6 +236,25 @@ export default function App() {
     };
   }, [permsMissing, refreshPerms]);
 
+  // Derived presentation values + hooks must run unconditionally BEFORE the
+  // onboarding early return below, so the hook count stays stable across
+  // renders (otherwise the app crashes with React error #300 when onboarding
+  // flips in/out).
+  const baseLabel = MENU.find((m) => m.id === view)?.label ?? "";
+  const sectionActive = headerSection;
+  const descText = flashDesc ?? (sectionActive?.desc ? sectionActive.desc : (DESC[view] ?? ""));
+  const frameCls = "content-frame " + (phase === "closing" ? "closing" : phase === "opening" ? "opening" : "");
+  const trHexPart = activeHexId ? `0x${activeHexId}` : "ALL";
+  const frameTr = useMemo(
+    () => (
+      <>
+        VX-
+        <Typewriter key={trHexPart} text={trHexPart} run={true} speed={11} />
+      </>
+    ),
+    [trHexPart],
+  );
+
   // Onboarding takes over the entire window — no nav / header / footer shell —
   // until config + permissions + a validated key are all satisfied.
   if (showOnboarding) {
@@ -305,21 +324,6 @@ export default function App() {
         return null;
     }
   }
-
-  const baseLabel = MENU.find((m) => m.id === view)?.label ?? "";
-  const sectionActive = headerSection;
-  const descText = flashDesc ?? (sectionActive?.desc ? sectionActive.desc : (DESC[view] ?? ""));
-  const frameCls = "content-frame " + (phase === "closing" ? "closing" : phase === "opening" ? "opening" : "");
-  const trHexPart = activeHexId ? `0x${activeHexId}` : "ALL";
-  const frameTr = useMemo(
-    () => (
-      <>
-        VX-
-        <Typewriter key={trHexPart} text={trHexPart} run={true} speed={11} />
-      </>
-    ),
-    [trHexPart],
-  );
 
   return (
     <div className={"app" + (theme.scanlines ? " scan" : "") + (theme.grid ? " gridbg" : "")}>
