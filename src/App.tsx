@@ -68,7 +68,7 @@ export default function App() {
   const [registry, setRegistry] = useState<Registry | null>(null);
   const [providers, setProviders] = useState<ProviderStatus>(EMPTY_PROVIDER_STATUS);
   const [providersReady, setProvidersReady] = useState(false);
-  const [perms, setPerms] = useState<PermissionStatus>({ microphone: true, accessibility: true });
+  const [perms, setPerms] = useState<PermissionStatus>({ microphone: "authorized", accessibility: true });
   const [permsReady, setPermsReady] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
@@ -128,7 +128,10 @@ export default function App() {
     ready &&
     providersReady &&
     permsReady &&
-    (!config.onboardingCompleted || !perms.microphone || !perms.accessibility || !apiKeySet);
+    (!config.onboardingCompleted ||
+      perms.microphone !== "authorized" ||
+      !perms.accessibility ||
+      !apiKeySet);
 
   useTauriEvent<RecState>(EVT.recState, (e) => setRecording(e.recording));
   useTauriEvent<ModeChanged>(EVT.modeChanged, () => refreshModes());
@@ -220,7 +223,7 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [switchTo, view]);
 
-  const permsMissing = !perms.microphone || !perms.accessibility;
+  const permsMissing = perms.microphone !== "authorized" || !perms.accessibility;
 
   // Auto-refresh permission status so grants made in System Settings appear
   // without a manual re-check or app restart. Poll while something is missing,

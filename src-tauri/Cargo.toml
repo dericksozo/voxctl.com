@@ -59,7 +59,7 @@ accessibility-sys = "0.1"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSNotification", "NSOperation", "block2"] }
 objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication", "NSSound", "NSApplication", "NSResponder"] }
-objc2-av-foundation = { version = "0.3", features = ["AVCaptureDevice", "AVMediaFormat"] }
+objc2-av-foundation = { version = "0.3", features = ["AVCaptureDevice", "AVMediaFormat", "block2"] }
 block2 = "0.6"
 
 # History persistence: SQLite metadata index + WAV files on disk.

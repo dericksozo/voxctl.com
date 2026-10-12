@@ -28,8 +28,6 @@ export interface Config {
   autoDeletePolicy: AutoDeletePolicy;
   /** First-run onboarding is complete once mic/key/first recording are done. */
   onboardingCompleted: boolean;
-  /** User skipped the optional Accessibility step during onboarding. */
-  accessibilitySkipped: boolean;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -41,7 +39,6 @@ export const DEFAULT_CONFIG: Config = {
   appLocale: "en",
   autoDeletePolicy: "never",
   onboardingCompleted: false,
-  accessibilitySkipped: false,
 };
 
 export interface Mode {
@@ -147,6 +144,10 @@ export interface StorageStats {
 }
 
 export interface PermissionStatus {
-  microphone: boolean;
+  /** Microphone TCC state. Only "authorized" means capture is allowed. */
+  microphone: MicStatus;
   accessibility: boolean;
 }
+
+/** Microphone TCC authorization state, mirrored from Rust `MicPermission`. */
+export type MicStatus = "notDetermined" | "restricted" | "denied" | "authorized";

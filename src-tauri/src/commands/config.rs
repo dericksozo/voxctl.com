@@ -40,9 +40,6 @@ pub struct Config {
     /// First-run onboarding is complete once mic/key/first recording are done.
     #[serde(default)]
     pub onboarding_completed: bool,
-    /// User skipped the optional Accessibility step during onboarding.
-    #[serde(default)]
-    pub accessibility_skipped: bool,
 }
 
 fn default_auto_delete_policy() -> String {
@@ -60,7 +57,6 @@ impl Default for Config {
             app_locale: "en".into(),
             auto_delete_policy: default_auto_delete_policy(),
             onboarding_completed: false,
-            accessibility_skipped: false,
         }
     }
 }

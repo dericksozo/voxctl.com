@@ -5,33 +5,32 @@ use serde::Serialize;
 use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
 
-use crate::commands::audio;
 use crate::platform::macos;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionStatus {
-    pub microphone: bool,
+    pub microphone: macos::MicPermission,
     pub accessibility: bool,
 }
 
 #[tauri::command]
 pub fn get_permissions() -> PermissionStatus {
     PermissionStatus {
-        microphone: macos::microphone_authorized(),
+        microphone: macos::microphone_status(),
         accessibility: macos::accessibility_trusted(),
     }
 }
 
-/// Trigger the microphone prompt (if undetermined) and report the resulting
-/// status. The user may need to re-check after responding to the dialog.
+/// Request microphone access via AVFoundation and report the resulting status.
+/// Blocking (waits for the user to answer the system prompt), so it runs off the
+/// main thread to avoid freezing the UI. A denied status cannot be re-prompted —
+/// the caller should route the user to System Settings.
 #[tauri::command]
-pub fn request_microphone() -> bool {
-    if macos::microphone_authorized() {
-        return true;
-    }
-    audio::trigger_mic_prompt();
-    macos::microphone_authorized()
+pub async fn request_microphone() -> macos::MicPermission {
+    tauri::async_runtime::spawn_blocking(macos::request_microphone_access)
+        .await
+        .unwrap_or_else(|_| macos::microphone_status())
 }
 
 /// Show the Accessibility prompt and register the app in the list.

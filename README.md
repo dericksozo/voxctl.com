@@ -39,6 +39,26 @@ No Automation permission is required — injection uses CGEvent keystrokes, not 
 > Dev caveat: the unsigned dev binary changes path each build, so macOS may re-ask for
 > Accessibility after rebuilds. A signed `.app` makes grants stick.
 
+### Stale permissions after reinstalling
+
+macOS ties Microphone and Accessibility grants to the app's *code identity*. Because
+this build is ad-hoc signed, every rebuild/reinstall has a new identity, so macOS can
+leave behind stale entries that no longer match the running app. Symptoms: onboarding
+keeps re-asking for the Microphone, or System Settings shows Accessibility as "on" but
+VOXCTL reports it as not granted.
+
+To clear the stale entries:
+
+```bash
+tccutil reset Microphone com.derick.voxctlcom
+tccutil reset Accessibility com.derick.voxctlcom
+sfltool resetbtm          # clears Background Task Management (often needed for Accessibility)
+```
+
+Then relaunch VOXCTL and re-grant. In System Settings → Privacy & Security →
+Accessibility, if a "VOXCTL" row is already checked but the app still isn't trusted,
+remove that row (select it, press the minus/`-` button) and re-add it.
+
 ## How it works (architecture)
 
 Everything heavy lives in **Rust**; the webview only renders UI and listens to events.
