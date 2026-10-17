@@ -124,13 +124,15 @@ fn build_hud(app: &AppHandle) -> tauri::Result<WebviewWindow> {
             panel.set_released_when_closed(false);
             panel.set_hides_on_deactivate(false);
             log::info!(
-                "HUD panel: floating={} hides_on_deactivate={} nonactivating={}",
+                "HUD panel: floating={} hides_on_deactivate={} nonactivating={} can_become_key={} key_only_if_needed={}",
                 panel.is_floating_panel(),
                 panel.hides_on_deactivate(),
                 panel
                     .as_panel()
                     .styleMask()
                     .contains(objc2_app_kit::NSWindowStyleMask::NonactivatingPanel),
+                panel.can_become_key_window(),
+                panel.becomes_key_only_if_needed(),
             );
         }
         Err(e) => log::error!("failed to convert HUD to NSPanel: {e}"),
@@ -169,9 +171,32 @@ fn show_window(app: &AppHandle, win: &WebviewWindow) {
     }
 }
 
+fn resign_if_key(app: &AppHandle) {
+    if let Ok(panel) = app.get_webview_panel(LABEL) {
+        if panel.as_panel().isKeyWindow() {
+            panel.resign_key_window();
+        }
+    }
+}
+
+/// Release key focus held by the non-activating HUD panel. Called before
+/// explicitly activating the dashboard so the main window can become key.
+pub fn release_key_focus(app: &AppHandle) {
+    resign_if_key(app);
+}
+
 fn hide_window(app: &AppHandle, win: &WebviewWindow) {
     match app.get_webview_panel(LABEL) {
-        Ok(panel) => panel.hide(),
+        Ok(panel) => {
+            // A non-activating panel can hold key focus without activating the
+            // app. Release it before hiding, otherwise the app can become
+            // "active" later with no key window (Dock/tray show appears dead).
+            if panel.as_panel().isKeyWindow() {
+                log::debug!("HUD panel was key; resigning before hide");
+                panel.resign_key_window();
+            }
+            panel.hide();
+        }
         Err(_) => {
             let _ = win.hide();
         }
@@ -207,6 +232,8 @@ pub fn show_hud(app: &AppHandle) {
     position(app, &win, BASE_W, BASE_H);
     // Display-only while recording: never blocks clicks on the app behind it.
     let _ = win.set_ignore_cursor_events(true);
+    // A new recording must never inherit key focus from a previous result card.
+    resign_if_key(app);
     // Order it in WITHOUT focusing, so the user's frontmost text field keeps key
     // focus (critical for injection). We never call set_focus on the HUD.
     show_window(app, &win);

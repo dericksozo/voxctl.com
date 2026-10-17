@@ -31,11 +31,27 @@ use commands::audio::RecorderState;
 /// button is clicked, so we re-show it and activate the app so it comes to
 /// front — `show()`/`set_focus()` alone don't re-activate a backgrounded app.
 fn show_main(app: &tauri::AppHandle) {
+    // The HUD is a non-activating panel. If it happens to hold key focus, drop
+    // it first so the dashboard can become the key window.
+    hud::release_key_focus(app);
     platform::macos::activate_app();
+
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.unminimize();
+        // Make the main window key/front at the AppKit level too. `set_focus`
+        // alone can no-op when the panel previously owned key focus, leaving
+        // the app active with no usable front window.
+        if let Ok(ptr) = win.ns_window() {
+            unsafe {
+                let ns_win = &*(ptr as *const objc2_app_kit::NSWindow);
+                ns_win.makeKeyAndOrderFront(None);
+                ns_win.orderFrontRegardless();
+            }
+        }
         let _ = win.set_focus();
+    } else {
+        log::warn!("show_main: main window missing");
     }
 }
 
