@@ -91,6 +91,7 @@ pub fn run() {
         .manage(RecorderState::default())
         .manage(commands::modes::ActiveModeState::default())
         .manage(retry::RetryState::default())
+        .manage(std::sync::Mutex::new(hud::HudState::default()))
         .setup(|app| {
             app.manage(history::init(app.handle())?);
             // NOTE: keychain migration is deliberately NOT run here. Any keychain
@@ -133,6 +134,8 @@ pub fn run() {
             commands::config::set_api_key,
             commands::config::delete_api_key,
             commands::config::provider_status,
+            commands::hud::hud_copy_result,
+            commands::hud::hud_dismiss_result,
             commands::registry::get_registry,
             commands::registry::refresh_registry,
             commands::modes::list_modes,

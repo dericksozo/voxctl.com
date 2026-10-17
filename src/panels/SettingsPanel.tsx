@@ -7,8 +7,18 @@ import { ShortcutRecorder } from "../components/ShortcutRecorder";
 import { useConfig } from "../hooks/useConfig";
 import { t } from "../i18n";
 import { AVAILABLE_LOCALES } from "../i18n";
-import { requestNotificationPermission, storageStats } from "../lib/ipc";
-import type { AutoDeletePolicy, CaptureMode, StorageStats } from "../lib/types";
+import {
+  requestAccessibility,
+  requestNotificationPermission,
+  storageStats,
+} from "../lib/ipc";
+import type {
+  AutoDeletePolicy,
+  CaptureMode,
+  DeliveryMode,
+  PermissionStatus,
+  StorageStats,
+} from "../lib/types";
 import {
   providerValidated,
   type ProviderStatus,
@@ -43,18 +53,23 @@ export function SettingsPanel({
   registry,
   providers,
   refreshProviders,
+  perms,
+  refreshPerms,
   recording,
   onSection,
 }: {
   registry: Registry | null;
   providers: ProviderStatus;
   refreshProviders: () => void;
+  perms: PermissionStatus;
+  refreshPerms: () => void;
   recording: boolean;
   onSection: (s: { label: string; desc: string } | null) => void;
 }) {
   const { config, set } = useConfig();
   const bodyRef = useRef<HTMLDivElement>(null);
   const lastSec = useRef("");
+  const [axBusy, setAxBusy] = useState(false);
 
   // Notifications are OFF by default. Turning them ON triggers the macOS
   // permission prompt; only persist ON if the user actually grants it.
@@ -66,6 +81,20 @@ export function SettingsPanel({
     }
     const granted = await requestNotificationPermission().catch(() => false);
     set("notifyOnModeSwitch", granted);
+  }
+
+  // Paste is the only delivery mode that needs Accessibility. Offer the grant
+  // inline so the user doesn't have to re-enter onboarding.
+  async function grantAccessibility() {
+    setAxBusy(true);
+    try {
+      await requestAccessibility();
+      refreshPerms();
+    } catch (e) {
+      console.error("accessibility request failed", e);
+    } finally {
+      setAxBusy(false);
+    }
   }
 
   // Scroll-spy: report the section nearest the top of the scroll container so the
@@ -157,18 +186,57 @@ export function SettingsPanel({
           <div className="vx-set-card">
             <div className="vx-set-row">
               <div className="vx-set-card-text">
-                <div className="vx-set-card-label">{t("settings.clipboard")}</div>
+                <div className="vx-set-card-label">{t("settings.delivery")}</div>
               </div>
-              <Toggle
-                on={config.copyToClipboard}
-                onToggle={() => set("copyToClipboard", !config.copyToClipboard)}
-                labels={[t("settings.on"), t("settings.off")]}
+              <Segmented<DeliveryMode>
+                value={config.deliveryMode}
+                options={[
+                  { value: "review", label: t("settings.delivery.review") },
+                  { value: "paste", label: t("settings.delivery.paste") },
+                  { value: "clipboard", label: t("settings.delivery.clipboard") },
+                ]}
+                onChange={(v) => set("deliveryMode", v)}
                 disabled={recording}
               />
             </div>
           </div>
-          <p className="vx-set-field-desc">{t("settings.clipboardSub")}</p>
+          <p className="vx-set-field-desc">
+            {t(`settings.deliveryHint.${config.deliveryMode}`)}
+          </p>
         </div>
+
+        {config.deliveryMode === "paste" ? (
+          <div className="vx-set-field">
+            <div className="vx-set-card">
+              <div className="vx-set-row">
+                <div className="vx-set-card-text">
+                  <div className="vx-set-card-label">{t("settings.alsoCopy")}</div>
+                </div>
+                <Toggle
+                  on={config.alsoCopy}
+                  onToggle={() => set("alsoCopy", !config.alsoCopy)}
+                  labels={[t("settings.on"), t("settings.off")]}
+                  disabled={recording}
+                />
+              </div>
+            </div>
+            <p className="vx-set-field-desc">{t("settings.alsoCopySub")}</p>
+          </div>
+        ) : null}
+
+        {config.deliveryMode === "paste" && !perms.accessibility ? (
+          <div className="vx-set-warn">
+            <span>{t("settings.axPasteWarning")}</span>
+            <button
+              type="button"
+              className="vx-btn vx-btn--mag"
+              onClick={grantAccessibility}
+              disabled={axBusy || recording}
+            >
+              {axBusy ? t("settings.validating") : t("settings.axGrant")}
+            </button>
+          </div>
+        ) : null}
       </section>
 
       <section className="set-section" data-sec="audio">

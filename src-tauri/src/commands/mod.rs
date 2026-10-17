@@ -4,6 +4,7 @@
 pub mod audio;
 pub mod config;
 pub mod history;
+pub mod hud;
 pub mod inject;
 pub mod modes;
 pub mod permissions;

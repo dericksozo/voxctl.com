@@ -162,12 +162,10 @@ fn finalize(
                 events::TRANSCRIPT_FINAL,
                 TranscriptText { text: text.clone() },
             );
-            let delivered = deliver(app, &text);
+            let outcome = deliver(app, id, &text);
             let _ = app.emit(events::HISTORY_CHANGED, ());
-            if delivered {
+            if matches!(outcome, DeliveryOutcome::Hidden) {
                 hud::hide_hud(app);
-            } else {
-                hide_after_delay(app);
             }
         }
         Ok(_) => {
@@ -186,37 +184,67 @@ fn finalize(
     crate::commands::history::run_retention(app);
 }
 
-/// Deliver the transcript: copy to clipboard if enabled, paste into the focused
-/// field when Accessibility is granted. Returns false when delivery hit a
-/// problem worth keeping the HUD error visible briefly.
-fn deliver(app: &AppHandle, text: &str) -> bool {
+enum DeliveryOutcome {
+    /// The HUD is showing the result card and owns its own lifecycle.
+    Shown,
+    /// Nothing left on screen; hide the HUD now.
+    Hidden,
+}
+
+/// Deliver the transcript according to the configured mode. Paste is the only
+/// mode that can fail visibly; it falls back to the review card so the text is
+/// never dropped. Returns which HUD transition to apply.
+fn deliver(app: &AppHandle, id: i64, text: &str) -> DeliveryOutcome {
     let cfg = config::load_config(app);
-    if cfg.copy_to_clipboard {
-        use tauri_plugin_clipboard_manager::ClipboardExt;
-        if let Err(e) = app.clipboard().write_text(text.to_string()) {
-            log::error!("clipboard write failed: {e}");
+    match cfg.delivery_mode {
+        config::DeliveryMode::Review => {
+            hud::show_result(app, id, text, false);
+            DeliveryOutcome::Shown
         }
-    }
-    if crate::platform::macos::accessibility_trusted() {
-        match crate::commands::inject::insert_text(text) {
-            Ok(()) => true,
-            Err(e) => {
-                log::error!("injection failed: {e}");
-                let _ = app.emit(events::ERROR, BackendError::new("inject", e));
-                false
+        config::DeliveryMode::Paste => {
+            if !crate::platform::macos::accessibility_trusted() {
+                // Don't emit an ERROR event: that would replace the card with the
+                // red error state. The card itself is the fallback.
+                log::warn!("accessibility not granted; falling back to the review card");
+                hud::show_result(app, id, text, false);
+                return DeliveryOutcome::Shown;
+            }
+            match crate::commands::inject::insert_text(text) {
+                Ok(()) => {
+                    if cfg.also_copy {
+                        if let Err(e) = write_clipboard(app, text) {
+                            log::error!("clipboard write failed: {e}");
+                        }
+                    }
+                    DeliveryOutcome::Hidden
+                }
+                Err(e) => {
+                    log::error!("injection failed: {e}; falling back to the review card");
+                    hud::show_result(app, id, text, false);
+                    DeliveryOutcome::Shown
+                }
             }
         }
-    } else {
-        log::warn!("accessibility not granted; skipping injection");
-        let _ = app.emit(
-            events::ERROR,
-            BackendError::new(
-                "inject",
-                "Accessibility permission needed to insert text. Grant it in Settings, then open History to copy.",
-            ),
-        );
-        false
+        config::DeliveryMode::Clipboard => match write_clipboard(app, text) {
+            Ok(()) => {
+                // Let the card flash its copied state, then auto-dismiss.
+                hud::show_result(app, id, text, true);
+                DeliveryOutcome::Shown
+            }
+            Err(e) => {
+                log::error!("clipboard write failed: {e}; falling back to the review card");
+                hud::show_result(app, id, text, false);
+                DeliveryOutcome::Shown
+            }
+        },
     }
+}
+
+fn write_clipboard(app: &AppHandle, text: &str) -> Result<(), String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    app.clipboard()
+        .write_text(text.to_string())
+        .map_err(|e| e.to_string())
 }
 
 /// Route a failed transcription to the right state: `needs_transcription` when

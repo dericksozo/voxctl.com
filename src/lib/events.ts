@@ -8,6 +8,8 @@ export const EVT = {
   recState: "voxctl:rec-state",
   /** Final transcript on stop: { text }. */
   transcriptFinal: "voxctl:transcript-final",
+  /** HUD result card is ready: { generation, autoCopied }. No transcript text. */
+  hudResult: "voxctl:hud-result",
   /** Active mode changed (auto-switch or manual): { id, name }. */
   modeChanged: "voxctl:mode-changed",
   /** History table changed; UI should refetch: {}. */
@@ -35,4 +37,10 @@ export interface ModeChanged {
 export interface BackendError {
   stage: string;
   message: string;
+}
+export interface HudResultEvent {
+  /** Token the card must echo back for copy/dismiss. */
+  generation: number;
+  /** Delivery mode already wrote the clipboard; flash copied and auto-dismiss. */
+  autoCopied: boolean;
 }

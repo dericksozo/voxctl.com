@@ -3,6 +3,8 @@
 import type { Capabilities } from "./registry";
 
 export type CaptureMode = "toggle" | "ptt";
+/** How a finished transcript is delivered. */
+export type DeliveryMode = "review" | "paste" | "clipboard";
 /** Automatic recording retention. Both the history row and the WAV are removed
  *  for recordings that fall outside the policy. */
 export type AutoDeletePolicy =
@@ -19,8 +21,10 @@ export interface Config {
   /** Accelerator string understood by the global-shortcut plugin, e.g. "Alt+Space". */
   shortcut: string;
   sfxEnabled: boolean;
-  /** Copy the final transcript to the system clipboard. Default OFF (brief §4). */
-  copyToClipboard: boolean;
+  /** Post-transcription delivery. Default: review card (no auto-paste). */
+  deliveryMode: DeliveryMode;
+  /** Only meaningful for `deliveryMode === "paste"`: also copy to clipboard. */
+  alsoCopy: boolean;
   notifyOnModeSwitch: boolean;
   /** UI locale, e.g. "en". */
   appLocale: string;
@@ -34,7 +38,8 @@ export const DEFAULT_CONFIG: Config = {
   captureMode: "toggle",
   shortcut: "Alt+Space",
   sfxEnabled: true,
-  copyToClipboard: false,
+  deliveryMode: "review",
+  alsoCopy: false,
   notifyOnModeSwitch: false,
   appLocale: "en",
   autoDeletePolicy: "never",
