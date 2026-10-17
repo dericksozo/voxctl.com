@@ -11,10 +11,7 @@
 
 use std::sync::Mutex;
 
-use tauri::{
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
-};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use tauri_nspanel::{tauri_panel, ManagerExt, WebviewWindowExt};
 
@@ -36,11 +33,12 @@ tauri_panel! {
 }
 
 const LABEL: &str = "hud";
-const BASE_W: f64 = 116.0;
-const BASE_H: f64 = 38.0;
-/// Wide enough for logo + settled meter + copy + dismiss without a layout jump.
-const RESULT_W: f64 = 176.0;
-const RESULT_H: f64 = 38.0;
+/// Fixed window size for both states. Wide enough for logo + settled meter +
+/// copy + dismiss in the result card; the recording pill is centered inside it.
+/// Keeping the frame constant means the HUD never resizes at runtime — window
+/// frame changes from a background thread were crashing WindowManagement.
+const HUD_W: f64 = 176.0;
+const HUD_H: f64 = 38.0;
 const BOTTOM_MARGIN: f64 = 22.0;
 
 /// Backend-owned transcript awaiting a copy/dismiss from the result card.
@@ -78,26 +76,37 @@ impl HudState {
     }
 }
 
-fn position(app: &AppHandle, win: &WebviewWindow, w: f64, h: f64) {
-    if let Ok(Some(monitor)) = app.primary_monitor() {
-        let scale = monitor.scale_factor();
-        let size = monitor.size();
-        let origin = monitor.position();
-        let screen_w = size.width as f64 / scale;
-        let screen_h = size.height as f64 / scale;
-        let origin_x = origin.x as f64 / scale;
-        let origin_y = origin.y as f64 / scale;
+/// Bottom-center origin on the primary display, in logical coordinates. Used
+/// once at build time so the HUD never has to move afterward.
+fn hud_origin(app: &AppHandle) -> Option<(f64, f64)> {
+    let monitor = app.primary_monitor().ok().flatten()?;
+    let scale = monitor.scale_factor();
+    let size = monitor.size();
+    let origin = monitor.position();
+    let screen_w = size.width as f64 / scale;
+    let screen_h = size.height as f64 / scale;
+    let origin_x = origin.x as f64 / scale;
+    let origin_y = origin.y as f64 / scale;
+    Some((
+        origin_x + (screen_w - HUD_W) / 2.0,
+        origin_y + screen_h - HUD_H - BOTTOM_MARGIN,
+    ))
+}
 
-        let x = origin_x + (screen_w - w) / 2.0;
-        let y = origin_y + screen_h - h - BOTTOM_MARGIN;
-        let _ = win.set_position(LogicalPosition::new(x, y));
+/// Run an AppKit/window operation on the main thread. Tauri's window methods
+/// dispatch internally, but `tauri-nspanel` calls AppKit directly, so all HUD
+/// panel work goes through here.
+fn on_main<F: FnOnce(AppHandle) + Send + 'static>(app: &AppHandle, f: F) {
+    let handle = app.clone();
+    if let Err(e) = app.run_on_main_thread(move || f(handle)) {
+        log::error!("failed to run HUD operation on main thread: {e}");
     }
 }
 
 fn build_hud(app: &AppHandle) -> tauri::Result<WebviewWindow> {
-    let win = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("hud.html".into()))
+    let builder = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("hud.html".into()))
         .title("VOXCTL REC")
-        .inner_size(BASE_W, BASE_H)
+        .inner_size(HUD_W, HUD_H)
         .decorations(false)
         .transparent(true)
         .always_on_top(true)
@@ -108,8 +117,12 @@ fn build_hud(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         // Deliver the first click to the webview even while another app is
         // frontmost, instead of consuming it in the window server.
         .accept_first_mouse(true)
-        .visible(false)
-        .build()?;
+        .visible(false);
+    let builder = match hud_origin(app) {
+        Some((x, y)) => builder.position(x, y),
+        None => builder,
+    };
+    let win = builder.build()?;
 
     // Swizzle the NSWindow into an NSPanel and add the non-activating style.
     // Without this, clicking the card activates VOXCTL and raises the dashboard.
@@ -152,10 +165,6 @@ fn window(app: &AppHandle) -> Option<WebviewWindow> {
             }
         },
     }
-}
-
-fn set_size(win: &WebviewWindow, w: f64, h: f64) {
-    let _ = win.set_size(LogicalSize::new(w, h));
 }
 
 /// Order the HUD in without making it key or activating the app. The panel's
@@ -225,18 +234,18 @@ pub fn show_hud(app: &AppHandle) {
         s.pending = None;
     }
 
-    let Some(win) = window(app) else {
-        return;
-    };
-    set_size(&win, BASE_W, BASE_H);
-    position(app, &win, BASE_W, BASE_H);
-    // Display-only while recording: never blocks clicks on the app behind it.
-    let _ = win.set_ignore_cursor_events(true);
-    // A new recording must never inherit key focus from a previous result card.
-    resign_if_key(app);
-    // Order it in WITHOUT focusing, so the user's frontmost text field keeps key
-    // focus (critical for injection). We never call set_focus on the HUD.
-    show_window(app, &win);
+    on_main(app, |app| {
+        let Some(win) = window(&app) else {
+            return;
+        };
+        // Display-only while recording: never blocks clicks on the app behind it.
+        let _ = win.set_ignore_cursor_events(true);
+        // A new recording must never inherit key focus from a previous card.
+        resign_if_key(&app);
+        // Order it in WITHOUT focusing, so the user's frontmost text field keeps
+        // key focus (critical for injection). We never call set_focus on the HUD.
+        show_window(&app, &win);
+    });
 }
 
 /// Hide the HUD and clear/invalidate any pending result.
@@ -247,11 +256,13 @@ pub fn hide_hud(app: &AppHandle) {
         s.next_generation();
         s.pending = None;
     }
-    if let Some(win) = app.get_webview_window(LABEL) {
-        // Restore click-through so a stale window can never swallow clicks.
-        let _ = win.set_ignore_cursor_events(true);
-        hide_window(app, &win);
-    }
+    on_main(app, |app| {
+        if let Some(win) = app.get_webview_window(LABEL) {
+            // Restore click-through so a stale window can never swallow clicks.
+            let _ = win.set_ignore_cursor_events(true);
+            hide_window(&app, &win);
+        }
+    });
 }
 
 /// Grow the HUD into its interactive result-card state and tell the webview to
@@ -269,22 +280,21 @@ pub fn show_result(app: &AppHandle, id: i64, text: &str, auto_copied: bool) -> u
         generation
     };
 
-    let Some(win) = window(app) else {
-        return generation;
-    };
-    set_size(&win, RESULT_W, RESULT_H);
-    position(app, &win, RESULT_W, RESULT_H);
-    // Interactive: copy + dismiss live in the card.
-    let _ = win.set_ignore_cursor_events(false);
-    show_window(app, &win);
-
-    let _ = app.emit(
-        events::HUD_RESULT,
-        HudResult {
-            generation,
-            auto_copied,
-        },
-    );
+    on_main(app, move |app| {
+        let Some(win) = window(&app) else {
+            return;
+        };
+        // Interactive: copy + dismiss live in the card.
+        let _ = win.set_ignore_cursor_events(false);
+        show_window(&app, &win);
+        let _ = app.emit(
+            events::HUD_RESULT,
+            HudResult {
+                generation,
+                auto_copied,
+            },
+        );
+    });
     generation
 }
 
@@ -310,10 +320,12 @@ pub fn dismiss_result(app: &AppHandle, generation: u64) -> bool {
         return false;
     }
 
-    if let Some(win) = app.get_webview_window(LABEL) {
-        let _ = win.set_ignore_cursor_events(true);
-        hide_window(app, &win);
-    }
+    on_main(app, |app| {
+        if let Some(win) = app.get_webview_window(LABEL) {
+            let _ = win.set_ignore_cursor_events(true);
+            hide_window(&app, &win);
+        }
+    });
     true
 }
 

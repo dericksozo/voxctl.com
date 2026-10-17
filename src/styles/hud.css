@@ -31,13 +31,15 @@ body {
 }
 #hud-root {
   display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
 }
 
 .hud {
   position: relative;
   display: flex;
   align-items: center;
-  width: 100%;
   gap: 8px;
   padding: 6px 11px;
   background: rgba(8, 10, 14, 0.85);
@@ -104,6 +106,7 @@ body {
    renders these controls. The body is pointer-events:none, so opt the card
    itself back in. */
 .hud.interactive {
+  width: 100%;
   pointer-events: auto;
   cursor: pointer;
   gap: 6px;
