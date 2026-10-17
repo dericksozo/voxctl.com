@@ -1,12 +1,13 @@
-//! The recording HUD overlay window. A borderless, transparent, always-on-top
-//! window pinned bottom-center that NEVER takes focus while recording — so the
+//! The recording HUD overlay. A borderless, transparent, always-on-top
+//! non-activating NSPanel pinned bottom-center that NEVER takes focus — so the
 //! user's frontmost app stays frontmost (critical for text injection) while
 //! recording. Built lazily on first show, then just shown/hidden.
 //!
-//! The same window doubles as the post-transcription result card: it grows a
+//! The same panel doubles as the post-transcription result card: it grows a
 //! little, becomes clickable (copy + dismiss), and hands its lifecycle to the
-//! webview. Click-through is re-enabled whenever the window is hidden or a new
-//! recording starts.
+//! webview. Clicking it does not activate VOXCTL or raise the dashboard.
+//! Click-through is re-enabled whenever the panel is hidden or a new recording
+//! starts.
 
 use std::sync::Mutex;
 
@@ -15,7 +16,24 @@ use tauri::{
     WebviewWindowBuilder,
 };
 
+use tauri_nspanel::{tauri_panel, ManagerExt, WebviewWindowExt};
+
 use crate::events::{self, HudResult};
+
+// The HUD is a non-activating floating panel: clicking Copy/Dismiss must not
+// activate VOXCTL (which would raise the dashboard) or steal focus from the
+// app the user is dictating into.
+tauri_panel! {
+    panel!(HudPanel {
+        config: {
+            can_become_key_window: false,
+            can_become_main_window: false,
+            is_floating_panel: true,
+            hides_on_deactivate: false,
+            becomes_key_only_if_needed: false
+        }
+    })
+}
 
 const LABEL: &str = "hud";
 const BASE_W: f64 = 116.0;
@@ -77,7 +95,7 @@ fn position(app: &AppHandle, win: &WebviewWindow, w: f64, h: f64) {
 }
 
 fn build_hud(app: &AppHandle) -> tauri::Result<WebviewWindow> {
-    WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("hud.html".into()))
+    let win = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("hud.html".into()))
         .title("VOXCTL REC")
         .inner_size(BASE_W, BASE_H)
         .decorations(false)
@@ -87,11 +105,38 @@ fn build_hud(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .resizable(false)
         .shadow(false)
         .focused(false)
-        // The result card must receive its first click while another app is
-        // frontmost. Without this macOS only activates VOXCTL on that click.
+        // Deliver the first click to the webview even while another app is
+        // frontmost, instead of consuming it in the window server.
         .accept_first_mouse(true)
         .visible(false)
-        .build()
+        .build()?;
+
+    // Swizzle the NSWindow into an NSPanel and add the non-activating style.
+    // Without this, clicking the card activates VOXCTL and raises the dashboard.
+    match win.to_panel::<HudPanel>() {
+        Ok(panel) => {
+            if let Err(e) =
+                panel.add_style_mask(objc2_app_kit::NSWindowStyleMask::NonactivatingPanel)
+            {
+                log::error!("failed to make HUD non-activating: {e}");
+            }
+            // Tauri owns the window; AppKit must not release it independently.
+            panel.set_released_when_closed(false);
+            panel.set_hides_on_deactivate(false);
+            log::info!(
+                "HUD panel: floating={} hides_on_deactivate={} nonactivating={}",
+                panel.is_floating_panel(),
+                panel.hides_on_deactivate(),
+                panel
+                    .as_panel()
+                    .styleMask()
+                    .contains(objc2_app_kit::NSWindowStyleMask::NonactivatingPanel),
+            );
+        }
+        Err(e) => log::error!("failed to convert HUD to NSPanel: {e}"),
+    }
+
+    Ok(win)
 }
 
 fn window(app: &AppHandle) -> Option<WebviewWindow> {
@@ -109,6 +154,28 @@ fn window(app: &AppHandle) -> Option<WebviewWindow> {
 
 fn set_size(win: &WebviewWindow, w: f64, h: f64) {
     let _ = win.set_size(LogicalSize::new(w, h));
+}
+
+/// Order the HUD in without making it key or activating the app. The panel's
+/// `orderFrontRegardless` is safer than `WebviewWindow::show()`, which goes
+/// through `makeKeyAndOrderFront`. Falls back to the normal window API if the
+/// panel conversion failed.
+fn show_window(app: &AppHandle, win: &WebviewWindow) {
+    match app.get_webview_panel(LABEL) {
+        Ok(panel) => panel.show(),
+        Err(_) => {
+            let _ = win.show();
+        }
+    }
+}
+
+fn hide_window(app: &AppHandle, win: &WebviewWindow) {
+    match app.get_webview_panel(LABEL) {
+        Ok(panel) => panel.hide(),
+        Err(_) => {
+            let _ = win.hide();
+        }
+    }
 }
 
 /// Pre-build the HUD (hidden) at startup. Building a window activates the app and
@@ -142,7 +209,7 @@ pub fn show_hud(app: &AppHandle) {
     let _ = win.set_ignore_cursor_events(true);
     // Order it in WITHOUT focusing, so the user's frontmost text field keeps key
     // focus (critical for injection). We never call set_focus on the HUD.
-    let _ = win.show();
+    show_window(app, &win);
 }
 
 /// Hide the HUD and clear/invalidate any pending result.
@@ -156,7 +223,7 @@ pub fn hide_hud(app: &AppHandle) {
     if let Some(win) = app.get_webview_window(LABEL) {
         // Restore click-through so a stale window can never swallow clicks.
         let _ = win.set_ignore_cursor_events(true);
-        let _ = win.hide();
+        hide_window(app, &win);
     }
 }
 
@@ -182,7 +249,7 @@ pub fn show_result(app: &AppHandle, id: i64, text: &str, auto_copied: bool) -> u
     position(app, &win, RESULT_W, RESULT_H);
     // Interactive: copy + dismiss live in the card.
     let _ = win.set_ignore_cursor_events(false);
-    let _ = win.show();
+    show_window(app, &win);
 
     let _ = app.emit(
         events::HUD_RESULT,
@@ -218,7 +285,7 @@ pub fn dismiss_result(app: &AppHandle, generation: u64) -> bool {
 
     if let Some(win) = app.get_webview_window(LABEL) {
         let _ = win.set_ignore_cursor_events(true);
-        let _ = win.hide();
+        hide_window(app, &win);
     }
     true
 }

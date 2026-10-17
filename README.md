@@ -107,7 +107,7 @@ src-tauri/src/
   resample.rs             rubato resample → 24kHz mono PCM16
   audio_pipeline.rs       on stop: resample → transcribe → deliver → save (always)
   platform/macos.rs       NSWorkspace frontmost app, AX focused URL, NSSound SFX, app-switch observer
-  hud.rs                  builds/positions the transparent HUD window
+  hud.rs                  builds/positions the transparent, non-activating HUD panel
 ```
 
 **Core flow:** global shortcut → `audio::start` (open cpal stream, show HUD, resolve Mode
