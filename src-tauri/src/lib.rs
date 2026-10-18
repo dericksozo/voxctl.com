@@ -181,6 +181,8 @@ pub fn run() {
             commands::history::increment_copy,
             commands::history::reveal_in_finder,
             commands::history::storage_stats,
+            commands::history::preview_audio_cleanup,
+            commands::history::cleanup_audio_now,
             commands::transcription::retranscribe,
         ])
         .build(tauri::generate_context!())

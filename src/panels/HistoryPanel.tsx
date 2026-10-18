@@ -1169,12 +1169,16 @@ export function HistoryPanel({
                             <div className="hm-menu-wrap">
                               <TipBtn
                                 className="hm-actbtn"
-                                disabled={busy === item.id}
+                                disabled={busy === item.id || !audioReady}
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setRerunFor(rerunFor === item.id ? null : item.id);
                                 }}
-                                tip={t("history.retranscribe")}
+                                tip={
+                                  audioReady
+                                    ? t("history.retranscribe")
+                                    : t("history.retranscribeNoAudio")
+                                }
                               >
                                 <IcoRerun size={14} />
                               </TipBtn>
@@ -1332,6 +1336,12 @@ export function HistoryPanel({
                             <span className="hm-meta-cell">
                               <span className="hm-meta-k">SIZE</span>
                               <span className="hm-meta-v">{size}</span>
+                            </span>
+                          ) : null}
+                          {item.audioStatus === "purged" ? (
+                            <span className="hm-meta-cell">
+                              <span className="hm-meta-k">AUDIO</span>
+                              <span className="hm-meta-v mag">{t("history.audioRemoved")}</span>
                             </span>
                           ) : null}
                           {cost ? (

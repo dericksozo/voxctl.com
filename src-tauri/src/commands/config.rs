@@ -53,9 +53,9 @@ pub struct Config {
     pub also_copy: bool,
     pub notify_on_mode_switch: bool,
     pub app_locale: String,
-    /// Automatic recording retention. One of: "never", "keep_latest_5",
-    /// "after_3_days", "after_2_weeks", "after_3_months". Both the history row
-    /// and the WAV are removed when a recording falls outside the policy.
+    /// Automatic audio retention (transcripts are always kept). One of: "never",
+    /// "keep_latest_5", "after_3_days", "after_2_weeks", "after_3_months". Only
+    /// the WAV is removed when a recording's audio falls outside the policy.
     #[serde(default = "default_auto_delete_policy")]
     pub auto_delete_policy: String,
     /// First-run onboarding is complete once mic/key/first recording are done.
