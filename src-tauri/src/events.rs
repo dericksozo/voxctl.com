@@ -7,6 +7,9 @@ use serde::Serialize;
 pub const MIC_LEVEL: &str = "voxctl:mic-level";
 pub const REC_STATE: &str = "voxctl:rec-state";
 pub const TRANSCRIPT_FINAL: &str = "voxctl:transcript-final";
+/// A transcript is ready to be reviewed in the HUD. Carries no text — the HUD
+/// only needs the generation token and whether it was already auto-copied.
+pub const HUD_RESULT: &str = "voxctl:hud-result";
 pub const MODE_CHANGED: &str = "voxctl:mode-changed";
 pub const HISTORY_CHANGED: &str = "voxctl:history-changed";
 pub const ERROR: &str = "voxctl:error";
@@ -33,6 +36,16 @@ pub struct RecState {
 #[derive(Clone, Serialize)]
 pub struct TranscriptText {
     pub text: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HudResult {
+    /// Invalidates stale HUD timers/commands.
+    pub generation: u64,
+    /// True when the delivery mode already wrote the clipboard, so the card
+    /// can show its copied state and auto-dismiss.
+    pub auto_copied: bool,
 }
 
 #[derive(Clone, Serialize)]

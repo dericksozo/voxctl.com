@@ -56,6 +56,9 @@ async-trait = "0.1"
 rustls = { version = "0.23", features = ["ring"] }
 
 # macOS injection + permissions (aligned with the objc2 versions tauri pulls).
+# tauri-nspanel turns the recording HUD into a non-activating NSPanel so
+# clicking Copy/Dismiss never activates VOXCTL or raises the dashboard.
+tauri-nspanel = "2.1"
 core-graphics = "0.24"
 core-foundation = "0.9"
 core-foundation-sys = "0.8"

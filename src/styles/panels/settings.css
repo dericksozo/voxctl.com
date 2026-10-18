@@ -163,6 +163,29 @@
   padding: 0 2px;
 }
 
+/* inline warning row (e.g. Paste selected without Accessibility) */
+.vx-set-warn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 11px 14px;
+  border: 1px solid var(--mag-line);
+  background: var(--mag-soft);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.6;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+.vx-set-warn > span {
+  min-width: 0;
+}
+.vx-set-warn .vx-btn {
+  flex: none;
+}
+
 /* ---- two settings side by side (capture controls, audio toggles) ---- */
 .vx-set-grid-2 {
   display: grid;

@@ -20,19 +20,21 @@ Requirements: Node, Rust (stable), Xcode Command Line Tools.
 
 1. Launch, open **Settings**, paste your OpenAI API key → **Save** (stored in the
    macOS Keychain, never in plaintext).
-2. Grant **Microphone** and **Accessibility** when prompted (see below).
-3. Press **⌥Space** (rebindable), speak, press again to stop. The text types itself
-   into whatever app is focused.
+2. Grant **Microphone** when prompted (see below).
+3. Press **⌥Space** (rebindable), speak, press again to stop. By default a small
+   result card appears with **copy** and **dismiss**; choose **Paste** under
+   Capture behavior to type transcripts straight into the focused field.
 
 ## Permissions (macOS)
 
-VOXCTL needs two TCC permissions; first-run onboarding detects what's missing and
+VOXCTL uses two TCC permissions; first-run onboarding detects what's missing and
 deep-links into System Settings:
 
-- **Microphone** — to capture audio. Declared via `src-tauri/Info.plist`
+- **Microphone** — to capture audio. Required. Declared via `src-tauri/Info.plist`
   (`NSMicrophoneUsageDescription`).
-- **Accessibility** — to (a) synthesize keystrokes for text injection and (b) read the
-  focused browser URL for Mode auto-switching. Checked with `AXIsProcessTrusted()`.
+- **Accessibility** — optional, needed for Paste delivery (synthesize keystrokes) and
+  for reading the focused browser URL in Mode auto-switching. Review and Copy
+  delivery work without it. Checked with `AXIsProcessTrusted()`.
 
 No Automation permission is required — injection uses CGEvent keystrokes, not AppleScript.
 
@@ -88,7 +90,7 @@ src/                      React + TS (Vite)
   App.tsx                 shell: header, nav, footer, panels (low-freq state only)
   components/             Primitives + isolated leaves: Clock, VolumeMeter (canvas/imperative), Typewriter
   panels/                 Home, History, Modes, Settings, Onboarding
-  hud/                    separate window: REC dot, live dB meter, partial transcript, language picker
+  hud/                    separate window: live meter while recording; copy/dismiss result card
   hooks/  lib/  i18n/  styles/
 src-tauri/src/
   lib.rs                  app builder: plugins, tray, windows, state, app-switch observer
@@ -100,11 +102,12 @@ src-tauri/src/
     config.rs             store-backed settings + Keychain API key (keyring)
     permissions.rs        mic/accessibility status, prompts, deep-links
     history.rs            (top-level) SQLite metadata + WAV files; always-save
+    hud.rs                result-card copy/dismiss commands (transcript lives in Rust)
   transcription.rs        Transcriber trait + OpenAiRealtimeTranscriber (WebSocket, rustls)
   resample.rs             rubato resample → 24kHz mono PCM16
-  audio_pipeline.rs       on stop: resample → transcribe → inject → save (always)
+  audio_pipeline.rs       on stop: resample → transcribe → deliver → save (always)
   platform/macos.rs       NSWorkspace frontmost app, AX focused URL, NSSound SFX, app-switch observer
-  hud.rs                  builds/positions the transparent HUD window
+  hud.rs                  builds/positions the transparent, non-activating HUD panel
 ```
 
 **Core flow:** global shortcut → `audio::start` (open cpal stream, show HUD, resolve Mode

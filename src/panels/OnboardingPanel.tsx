@@ -68,17 +68,23 @@ export function OnboardingPanel({
   }
 
   const micStatus: StepStatus = micBlocked ? "error" : statusOf(micGranted, busyStep === "mic");
-  const accStatus = statusOf(perms.accessibility, busyStep === "acc");
+  // Accessibility is optional now (only Paste delivery + app/website triggers
+  // need it), so it never blocks setup and never shows "needs attention".
+  const accStatus: StepStatus = perms.accessibility
+    ? "done"
+    : busyStep === "acc"
+      ? "progress"
+      : "waiting";
   const keyStatus = statusOf(hasKey, false);
 
-  const doneCount = [micGranted, perms.accessibility, hasKey].filter(Boolean).length;
-  const allDone = doneCount === 3;
+  const doneCount = [micGranted, hasKey].filter(Boolean).length;
+  const allDone = doneCount === 2;
 
   const note = !reentry
     ? "FIRST LAUNCH"
     : !micGranted
       ? "RE-ENTRY · MICROPHONE REVOKED"
-      : !perms.accessibility
+      : config.deliveryMode === "paste" && !perms.accessibility
         ? "RE-ENTRY · ACCESSIBILITY REVOKED"
         : !hasKey
           ? "RE-ENTRY · ALL KEYS REMOVED"
@@ -126,9 +132,8 @@ export function OnboardingPanel({
     }
   }
 
-  // Accessibility is now a required gate, so there is no skip / clipboard
-  // fallback. Completion simply records the flag; the App gate (mic + accessibility
-  // + key all satisfied) lands the user in the app's empty state.
+  // Required setup is microphone + one validated key. Accessibility is optional
+  // and can be granted later from Settings when Paste delivery is selected.
   function enterApp() {
     if (!allDone) return;
     set("onboardingCompleted", true);
@@ -188,13 +193,14 @@ export function OnboardingPanel({
           <StepRow
             n="2"
             icon={<KeyboardIcon />}
-            title="ACCESSIBILITY ACCESS"
+            title="ACCESSIBILITY ACCESS — OPTIONAL"
             desc={
               perms.accessibility
-                ? "Required to type transcribed text into your apps."
-                : "Required to type transcribed text into your apps. If it shows as already enabled, remove the stale VOXCTL entry first."
+                ? "Enabled — Paste delivery and app/website mode switching can use it."
+                : "Only needed for Paste delivery and app/website mode switching. Review mode works without it. If it shows as already enabled, remove the stale VOXCTL entry first."
             }
             status={accStatus}
+            optional
             doneLabel="GRANTED"
             action={
               <>
@@ -204,7 +210,7 @@ export function OnboardingPanel({
                   onClick={grantAccessibility}
                   disabled={busyStep !== null}
                 >
-                  {accStatus === "error" ? "RE-GRANT" : "GRANT"}
+                  GRANT
                 </button>
                 <button
                   type="button"
@@ -260,9 +266,9 @@ export function OnboardingPanel({
 
         <div className="onb-footer">
           <div className="onb-progress">
-            <span className="onb-progress-txt">{doneCount} / 3 COMPLETE</span>
+            <span className="onb-progress-txt">{doneCount} / 2 COMPLETE</span>
             <span className="onb-progress-bar">
-              <span className="onb-progress-fill" style={{ width: `${(doneCount / 3) * 100}%` }} />
+              <span className="onb-progress-fill" style={{ width: `${(doneCount / 2) * 100}%` }} />
             </span>
           </div>
           <button
@@ -290,6 +296,7 @@ function StepRow({
   doneLabel,
   action,
   expanded,
+  optional = false,
 }: {
   n: string;
   icon: ReactNode;
@@ -299,6 +306,7 @@ function StepRow({
   doneLabel: string;
   action?: ReactNode;
   expanded?: ReactNode;
+  optional?: boolean;
 }) {
   const active = status === "waiting" || status === "error";
   return (
@@ -318,7 +326,7 @@ function StepRow({
           <div className="onb-step-desc">{desc}</div>
         </div>
         <div className="onb-step-actions">
-          <StatusPill status={status} doneLabel={doneLabel} />
+          <StatusPill status={status} doneLabel={doneLabel} optional={optional} />
           {active && action ? action : null}
         </div>
       </div>
@@ -327,7 +335,15 @@ function StepRow({
   );
 }
 
-function StatusPill({ status, doneLabel }: { status: StepStatus; doneLabel: string }) {
+function StatusPill({
+  status,
+  doneLabel,
+  optional = false,
+}: {
+  status: StepStatus;
+  doneLabel: string;
+  optional?: boolean;
+}) {
   const label =
     status === "done"
       ? doneLabel
@@ -335,7 +351,9 @@ function StatusPill({ status, doneLabel }: { status: StepStatus; doneLabel: stri
         ? "WORKING…"
         : status === "error"
           ? "NEEDS ATTENTION"
-          : "WAITING";
+          : optional
+            ? "OPTIONAL"
+            : "WAITING";
   return (
     <span className={"onb-pill " + status}>
       {status === "done" ? <CheckIcon /> : null}

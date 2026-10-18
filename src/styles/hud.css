@@ -31,6 +31,9 @@ body {
 }
 #hud-root {
   display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
 }
 
 .hud {
@@ -95,4 +98,71 @@ body {
 /* error: quiet red accent on the frame, no text */
 .hud.error {
   border-color: color-mix(in srgb, var(--err) 70%, transparent);
+}
+
+/* ---- result card (ready / copied) ----
+   The window is still click-through while recording; it only becomes
+   interactive when the backend turns off `ignore_cursor_events` and the card
+   renders these controls. The body is pointer-events:none, so opt the card
+   itself back in. */
+.hud.interactive {
+  width: 100%;
+  pointer-events: auto;
+  cursor: pointer;
+  gap: 6px;
+}
+.hud.leaving {
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+
+.hud-copy,
+.hud-dismiss {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(212, 212, 216, 0.7);
+  cursor: pointer;
+  transition: color 0.1s, background 0.1s;
+}
+.hud-copy {
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  border-radius: 4px;
+}
+.hud-copy:hover {
+  color: var(--pink);
+  background: rgba(255, 10, 140, 0.14);
+}
+.hud-copy.copied {
+  color: var(--pink);
+  background: rgba(255, 10, 140, 0.16);
+  animation: hudCopied 0.5s ease;
+}
+.hud-dismiss {
+  width: 18px;
+  height: 22px;
+  color: rgba(212, 212, 216, 0.38);
+}
+.hud-dismiss:hover {
+  color: #fff;
+}
+
+@keyframes hudCopied {
+  0% {
+    transform: scale(0.82);
+  }
+  55% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
+  }
 }

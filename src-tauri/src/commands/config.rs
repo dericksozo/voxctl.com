@@ -23,6 +23,19 @@ pub const STORE_FILE: &str = "settings.json";
 /// registry being loadable.
 const PROVIDERS: [&str; 3] = ["openai", "xai", "gemini"];
 
+/// How a finished transcript reaches the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryMode {
+    /// Leave the HUD up as a review card (copy + dismiss). The default.
+    #[default]
+    Review,
+    /// Type the text into the focused field (requires Accessibility).
+    Paste,
+    /// Write the text to the clipboard and flash a confirmation.
+    Clipboard,
+}
+
 /// Mirrors the TypeScript `Config` (serde camelCase). Single source of truth
 /// lives in `settings.json`; Rust reads it on demand.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,7 +44,13 @@ pub struct Config {
     pub capture_mode: String,
     pub shortcut: String,
     pub sfx_enabled: bool,
-    pub copy_to_clipboard: bool,
+    /// Post-transcription delivery. Defaults to `review`.
+    #[serde(default)]
+    pub delivery_mode: DeliveryMode,
+    /// Only meaningful for `delivery_mode == Paste`: also write the transcript
+    /// to the clipboard. Migrated from the legacy `copyToClipboard` flag.
+    #[serde(default)]
+    pub also_copy: bool,
     pub notify_on_mode_switch: bool,
     pub app_locale: String,
     /// Automatic recording retention. One of: "never", "keep_latest_5",
@@ -54,7 +73,8 @@ impl Default for Config {
             capture_mode: "toggle".into(),
             shortcut: "Alt+Space".into(),
             sfx_enabled: true,
-            copy_to_clipboard: false,
+            delivery_mode: DeliveryMode::Review,
+            also_copy: false,
             notify_on_mode_switch: false,
             app_locale: "en".into(),
             auto_delete_policy: default_auto_delete_policy(),
@@ -67,12 +87,38 @@ impl Default for Config {
 pub fn load_config(app: &AppHandle) -> Config {
     if let Ok(store) = app.store(STORE_FILE) {
         if let Some(v) = store.get("config") {
-            if let Ok(cfg) = serde_json::from_value::<Config>(v) {
+            if let Some(cfg) = normalize_config(v) {
                 return cfg;
             }
         }
     }
     Config::default()
+}
+
+/// Deserialize a stored config, applying the legacy `copyToClipboard` migration
+/// when the new `deliveryMode` key is absent.
+///
+/// - legacy copy true  -> Paste + also-copy (preserves today's behavior)
+/// - legacy copy false -> Review (the new default)
+///
+/// An invalid `deliveryMode` makes deserialization fail, which routes the caller
+/// to `Config::default()` (Review) rather than trusting a bad value.
+fn normalize_config(v: serde_json::Value) -> Option<Config> {
+    let has_new_mode = v.get("deliveryMode").is_some();
+    let legacy_copy = v
+        .get("copyToClipboard")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let mut cfg = serde_json::from_value::<Config>(v).ok()?;
+    if !has_new_mode {
+        cfg.delivery_mode = if legacy_copy {
+            DeliveryMode::Paste
+        } else {
+            DeliveryMode::Review
+        };
+        cfg.also_copy = legacy_copy;
+    }
+    Some(cfg)
 }
 
 #[tauri::command]
@@ -345,6 +391,61 @@ mod tests {
     #[test]
     fn unknown_provider_is_rejected() {
         assert!(account("anthropic").is_err());
+    }
+
+    fn base_config_json() -> serde_json::Value {
+        serde_json::json!({
+            "captureMode": "toggle",
+            "shortcut": "Alt+Space",
+            "sfxEnabled": true,
+            "notifyOnModeSwitch": false,
+            "appLocale": "en",
+            "autoDeletePolicy": "never",
+            "onboardingCompleted": true
+        })
+    }
+
+    #[test]
+    fn legacy_copy_true_migrates_to_paste_with_also_copy() {
+        let mut v = base_config_json();
+        v["copyToClipboard"] = serde_json::json!(true);
+        let cfg = normalize_config(v).expect("config should parse");
+        assert_eq!(cfg.delivery_mode, DeliveryMode::Paste);
+        assert!(cfg.also_copy);
+    }
+
+    #[test]
+    fn legacy_copy_false_migrates_to_review() {
+        let mut v = base_config_json();
+        v["copyToClipboard"] = serde_json::json!(false);
+        let cfg = normalize_config(v).expect("config should parse");
+        assert_eq!(cfg.delivery_mode, DeliveryMode::Review);
+        assert!(!cfg.also_copy);
+    }
+
+    #[test]
+    fn missing_legacy_key_defaults_to_review() {
+        let cfg = normalize_config(base_config_json()).expect("config should parse");
+        assert_eq!(cfg.delivery_mode, DeliveryMode::Review);
+        assert!(!cfg.also_copy);
+    }
+
+    #[test]
+    fn explicit_delivery_mode_wins_over_legacy() {
+        let mut v = base_config_json();
+        v["copyToClipboard"] = serde_json::json!(true);
+        v["deliveryMode"] = serde_json::json!("clipboard");
+        v["alsoCopy"] = serde_json::json!(false);
+        let cfg = normalize_config(v).expect("config should parse");
+        assert_eq!(cfg.delivery_mode, DeliveryMode::Clipboard);
+        assert!(!cfg.also_copy);
+    }
+
+    #[test]
+    fn invalid_delivery_mode_is_rejected() {
+        let mut v = base_config_json();
+        v["deliveryMode"] = serde_json::json!("telepathy");
+        assert!(normalize_config(v).is_none());
     }
 
     /// Live check that each provider's free validation endpoint accepts a real

@@ -4,12 +4,19 @@
 
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { load, type Store } from "@tauri-apps/plugin-store";
-import { DEFAULT_CONFIG, type Config } from "../lib/types";
+import { DEFAULT_CONFIG, type Config, type DeliveryMode } from "../lib/types";
 import { setLocale } from "../i18n";
 import { reloadConfig } from "../lib/ipc";
 
 const STORE_FILE = "settings.json";
 const KEY = "config";
+
+/** Stored shape before the delivery mode replaced the copy-to-clipboard flag. */
+type StoredConfig = Partial<Config> & { copyToClipboard?: boolean };
+
+function isDeliveryMode(v: unknown): v is DeliveryMode {
+  return v === "review" || v === "paste" || v === "clipboard";
+}
 
 interface ConfigCtx {
   config: Config;
@@ -30,11 +37,39 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
       try {
         const store = await load(STORE_FILE, { autoSave: true, defaults: {} });
         storeRef.current = store;
-        const saved = (await store.get<Partial<Config>>(KEY)) ?? {};
+        const saved = (await store.get<StoredConfig>(KEY)) ?? {};
         if (!alive) return;
-        const merged = { ...DEFAULT_CONFIG, ...saved };
+        // Legacy migration, mirroring Rust's `normalize_config`:
+        // copyToClipboard:true kept the old paste-and-copy behavior; anything
+        // else becomes the new default review card.
+        const {
+          copyToClipboard: legacyCopy,
+          deliveryMode: storedMode,
+          ...rest
+        } = saved;
+        const merged: Config = {
+          ...DEFAULT_CONFIG,
+          ...rest,
+          deliveryMode: isDeliveryMode(storedMode)
+            ? storedMode
+            : legacyCopy === true
+              ? "paste"
+              : DEFAULT_CONFIG.deliveryMode,
+          alsoCopy: rest.alsoCopy ?? legacyCopy === true,
+        };
         setConfig(merged);
         setLocale(merged.appLocale);
+        // Write the normalized shape once so the legacy key disappears and
+        // Rust sees the same mode on its next read.
+        const needsMigration =
+          legacyCopy !== undefined ||
+          (storedMode !== undefined && !isDeliveryMode(storedMode));
+        if (needsMigration) {
+          store
+            .set(KEY, merged)
+            .then(() => store.save())
+            .catch((e) => console.error("config migration failed", e));
+        }
       } catch (e) {
         console.error("config load failed", e);
       } finally {

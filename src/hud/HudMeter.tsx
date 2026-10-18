@@ -9,8 +9,13 @@ const COUNT = 7;
  *  re-renders), painting once per animation frame.
  *   - listening:    blocks fill left→right with the live mic level.
  *   - transcribing: indeterminate "scanner" sweep (no mic data while processing).
+ *   - ready/copied: all blocks solid — the transcript is done.
  *   - error:        all blocks cleared. */
-export function HudMeter({ phase }: { phase: "listening" | "transcribing" | "error" }) {
+export function HudMeter({
+  phase,
+}: {
+  phase: "listening" | "transcribing" | "ready" | "copied" | "error";
+}) {
   const blocksRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
@@ -25,6 +30,11 @@ export function HudMeter({ phase }: { phase: "listening" | "transcribing" | "err
 
     if (phase === "error") {
       paint(() => false);
+      return;
+    }
+
+    if (phase === "ready" || phase === "copied") {
+      paint(() => true);
       return;
     }
 

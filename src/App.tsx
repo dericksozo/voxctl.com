@@ -130,7 +130,6 @@ export default function App() {
     permsReady &&
     (!config.onboardingCompleted ||
       perms.microphone !== "authorized" ||
-      !perms.accessibility ||
       !apiKeySet);
 
   useTauriEvent<RecState>(EVT.recState, (e) => setRecording(e.recording));
@@ -224,6 +223,11 @@ export default function App() {
   }, [switchTo, view]);
 
   const permsMissing = perms.microphone !== "authorized" || !perms.accessibility;
+  // Accessibility is optional now: it only matters for Paste delivery (and
+  // app/website mode triggers). Don't nag review-mode users about it forever.
+  const permsWarning =
+    perms.microphone !== "authorized" ||
+    (config.deliveryMode === "paste" && !perms.accessibility);
 
   // Auto-refresh permission status so grants made in System Settings appear
   // without a manual re-check or app restart. Poll while something is missing,
@@ -319,6 +323,8 @@ export default function App() {
             registry={registry}
             providers={providers}
             refreshProviders={refreshProviders}
+            perms={perms}
+            refreshPerms={refreshPerms}
             recording={recording}
             onSection={setHeaderSection}
           />
@@ -338,7 +344,7 @@ export default function App() {
           </h1>
         </div>
         <div className="head-center">
-          {permsMissing ? (
+          {permsWarning ? (
             <button type="button" className="mode-pill warn" onClick={() => switchTo("settings")}>
               {t("perm.title")}
             </button>

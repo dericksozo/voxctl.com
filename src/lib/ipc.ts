@@ -90,3 +90,9 @@ export const storageStats = () => invoke<StorageStats>("storage_stats");
 // --- Config (also persisted JS-side via the store; this re-reads Rust's view) ---
 export const getConfig = () => invoke<Config>("get_config");
 export const reloadConfig = () => invoke<void>("reload_config");
+
+// --- HUD result card (transcript stays in Rust; the card echoes a token) ---
+export const copyHudResult = (generation: number) =>
+  invoke<void>("hud_copy_result", { generation });
+export const dismissHudResult = (generation: number) =>
+  invoke<void>("hud_dismiss_result", { generation });
