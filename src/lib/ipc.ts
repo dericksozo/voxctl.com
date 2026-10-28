@@ -5,6 +5,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   ActiveMode,
+  AudioCleanupPreview,
+  AudioCleanupResult,
   Config,
   HistoryDetail,
   HistoryItem,
@@ -86,6 +88,12 @@ export const retranscribe = (id: number, modeId: string) =>
 
 // --- Storage ---
 export const storageStats = () => invoke<StorageStats>("storage_stats");
+/** What the current audio-retention policy would remove (read-only). */
+export const previewAudioCleanup = () =>
+  invoke<AudioCleanupPreview>("preview_audio_cleanup");
+/** Run the current audio-retention policy immediately; transcripts are kept. */
+export const cleanupAudioNow = () =>
+  invoke<AudioCleanupResult>("cleanup_audio_now");
 
 // --- Config (also persisted JS-side via the store; this re-reads Rust's view) ---
 export const getConfig = () => invoke<Config>("get_config");

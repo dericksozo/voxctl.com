@@ -5,8 +5,8 @@ import type { Capabilities } from "./registry";
 export type CaptureMode = "toggle" | "ptt";
 /** How a finished transcript is delivered. */
 export type DeliveryMode = "review" | "paste" | "clipboard";
-/** Automatic recording retention. Both the history row and the WAV are removed
- *  for recordings that fall outside the policy. */
+/** Automatic audio retention. Only the stored WAV is removed for recordings
+ *  that fall outside the policy; transcripts are always kept. */
 export type AutoDeletePolicy =
   | "never"
   | "keep_latest_5"
@@ -28,7 +28,7 @@ export interface Config {
   notifyOnModeSwitch: boolean;
   /** UI locale, e.g. "en". */
   appLocale: string;
-  /** Automatic recording-retention policy. */
+  /** Automatic audio-retention policy (transcripts are never auto-deleted). */
   autoDeletePolicy: AutoDeletePolicy;
   /** First-run onboarding is complete once mic/key/first recording are done. */
   onboardingCompleted: boolean;
@@ -96,7 +96,7 @@ export type RecordingStatus =
   | "done"
   | "failed"
   | "needs_transcription";
-export type AudioStatus = "capturing" | "saving" | "ready" | "failed";
+export type AudioStatus = "capturing" | "saving" | "ready" | "failed" | "purged";
 
 export interface HistoryItem {
   id: number;
@@ -111,7 +111,7 @@ export interface HistoryItem {
   words: number;
   favorite: boolean;
   copyCount: number;
-  /** Absolute path to the stored WAV (read via a Rust command for playback). */
+  /** Absolute path to the stored WAV; empty once audio has been purged. */
   audioPath: string;
   status: RecordingStatus;
   /** Registry model id used for this recording (drives cost + re-run). */
@@ -146,6 +146,18 @@ export interface StorageStats {
   totalBytes: number;
   fileCount: number;
   recordingCount: number;
+}
+
+/** What the active audio-retention policy would purge right now. */
+export interface AudioCleanupPreview {
+  count: number;
+  bytes: number;
+}
+
+/** What an explicit "clean up now" pass actually removed. */
+export interface AudioCleanupResult {
+  count: number;
+  freedBytes: number;
 }
 
 export interface PermissionStatus {

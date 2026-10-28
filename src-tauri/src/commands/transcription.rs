@@ -36,6 +36,11 @@ fn diarization_dropped(requested: bool, text: &str, speaker_count: usize) -> boo
 #[tauri::command]
 pub async fn retranscribe(app: AppHandle, id: i64, mode_id: String) -> Result<RerunResult, String> {
     let item = history::get(&app.state::<HistoryDb>(), id).ok_or("recording not found")?;
+    // Re-run needs the saved WAV. Audio may have been removed by the retention
+    // policy while the transcript row was deliberately kept.
+    if item.audio_status != "ready" || item.audio_path.is_empty() {
+        return Err("Audio for this recording is no longer available.".into());
+    }
 
     let mode = modes::all_modes(&app)
         .into_iter()

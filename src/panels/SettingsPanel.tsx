@@ -8,11 +8,14 @@ import { useConfig } from "../hooks/useConfig";
 import { t } from "../i18n";
 import { AVAILABLE_LOCALES } from "../i18n";
 import {
+  cleanupAudioNow,
+  previewAudioCleanup,
   requestAccessibility,
   requestNotificationPermission,
   storageStats,
 } from "../lib/ipc";
 import type {
+  AudioCleanupPreview,
   AutoDeletePolicy,
   CaptureMode,
   DeliveryMode,
@@ -326,7 +329,10 @@ export function SettingsPanel({
   );
 }
 
-const fmtMB = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+const fmtSize = (bytes: number) => {
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 ** 3)).toFixed(2)} GB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
 
 const AUTO_DELETE_OPTIONS: { value: AutoDeletePolicy; label: string }[] = [
   { value: "never", label: "settings.autoDeleteNever" },
@@ -336,7 +342,8 @@ const AUTO_DELETE_OPTIONS: { value: AutoDeletePolicy; label: string }[] = [
   { value: "after_3_months", label: "settings.autoDelete3m" },
 ];
 
-/** Storage: disk used + the auto-delete retention policy (Storage section). */
+/** Storage: disk used + audio-only retention policy, plus an explicit
+ *  "clean up now" pass guarded by an inline confirmation. */
 function StorageSection({
   policy,
   onPolicy,
@@ -347,9 +354,58 @@ function StorageSection({
   recording: boolean;
 }) {
   const [stats, setStats] = useState<StorageStats | null>(null);
-  useEffect(() => {
+  const [preview, setPreview] = useState<AudioCleanupPreview | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  function refreshStats() {
     storageStats().then(setStats).catch(() => {});
+  }
+  useEffect(() => {
+    refreshStats();
   }, []);
+
+  function changePolicy(v: AutoDeletePolicy) {
+    onPolicy(v);
+    setPreview(null);
+    setMessage(null);
+  }
+
+  async function beginCleanup() {
+    setMessage(null);
+    setBusy(true);
+    try {
+      const p = await previewAudioCleanup();
+      if (p.count === 0) {
+        setMessage(t("settings.cleanupNothing"));
+        setPreview(null);
+      } else {
+        setPreview(p);
+      }
+    } catch {
+      setMessage(t("settings.cleanupFailed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmCleanup() {
+    setBusy(true);
+    try {
+      const res = await cleanupAudioNow();
+      setMessage(
+        t("settings.cleanupDone", { n: res.count, size: fmtSize(res.freedBytes) }),
+      );
+      setPreview(null);
+      refreshStats();
+    } catch {
+      setMessage(t("settings.cleanupFailed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const canClean = !recording && !busy && policy !== "never";
 
   return (
     <>
@@ -360,7 +416,7 @@ function StorageSection({
           </div>
           <div className="vx-set-stat">
             {stats
-              ? t("settings.storageUsed", { size: fmtMB(stats.totalBytes), n: stats.recordingCount })
+              ? t("settings.storageUsed", { size: fmtSize(stats.totalBytes), n: stats.recordingCount })
               : "—"}
           </div>
         </div>
@@ -372,7 +428,7 @@ function StorageSection({
           <select
             className="set-select"
             value={policy}
-            onChange={(e) => onPolicy(e.target.value as AutoDeletePolicy)}
+            onChange={(e) => changePolicy(e.target.value as AutoDeletePolicy)}
             disabled={recording}
           >
             {AUTO_DELETE_OPTIONS.map((o) => (
@@ -381,6 +437,51 @@ function StorageSection({
               </option>
             ))}
           </select>
+
+          {preview ? (
+            <div className="vx-set-cleanup-box">
+              <p>
+                {t("settings.cleanupConfirm", {
+                  n: preview.count,
+                  size: fmtSize(preview.bytes),
+                })}
+              </p>
+              <div className="vx-set-cleanup-actions">
+                <button
+                  type="button"
+                  className="vx-btn"
+                  onClick={() => setPreview(null)}
+                  disabled={busy}
+                >
+                  {t("settings.cleanupCancel")}
+                </button>
+                <button
+                  type="button"
+                  className="vx-btn vx-btn--danger"
+                  onClick={confirmCleanup}
+                  disabled={busy}
+                >
+                  {busy ? t("settings.cleanupWorking") : t("settings.cleanupRemove")}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="vx-set-cleanup">
+              <button
+                type="button"
+                className="vx-btn vx-btn--danger"
+                onClick={beginCleanup}
+                disabled={!canClean}
+              >
+                {busy ? t("settings.cleanupWorking") : t("settings.cleanupNow")}
+              </button>
+              {policy === "never" ? (
+                <span className="vx-set-cleanup-note">{t("settings.cleanupNever")}</span>
+              ) : null}
+            </div>
+          )}
+
+          {message ? <p className="vx-set-cleanup-msg">{message}</p> : null}
         </div>
         <p className="vx-set-field-desc">{t("settings.autoDeleteSub")}</p>
       </div>

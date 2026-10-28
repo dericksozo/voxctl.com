@@ -746,40 +746,100 @@ pub fn storage_stats(app: &AppHandle) -> StorageStats {
     }
 }
 
-/// Enforce the auto-delete retention `policy`, returning the audio paths of the
-/// removed rows so the caller can delete the files. Only terminal rows
-/// (`done`/`failed`) are eligible, so a row still `recording`/`transcribing` is
-/// never swept out from under the pipeline. `"never"` and unknown policies are
-/// no-ops. Time policies delete rows older than a fixed age; `keep_latest_5`
-/// keeps the 5 most recent recordings and drops the rest.
-pub fn enforce_retention(db: &HistoryDb, policy: &str) -> Vec<String> {
-    // Eligible-row predicate. The cutoff/limit is interpolated from a trusted
-    // i64 or a constant — no user input reaches the SQL string.
-    let predicate = match policy {
-        "after_3_days" => time_predicate(3),
-        "after_2_weeks" => time_predicate(14),
-        "after_3_months" => time_predicate(90),
-        "keep_latest_5" => "status IN ('done','failed') AND id NOT IN \
-             (SELECT id FROM recordings ORDER BY created_at DESC LIMIT 5)"
-            .to_string(),
-        _ => return Vec::new(),
+/// Result of an audio-retention pass: the files that should be removed from
+/// disk plus the bytes they occupy.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AudioPurge {
+    pub paths: Vec<String>,
+    pub bytes: i64,
+}
+
+impl AudioPurge {
+    pub fn count(&self) -> i64 {
+        self.paths.len() as i64
+    }
+}
+
+/// Rows the policy would purge right now: `(audio_path, audio_bytes)`.
+fn pending_audio(conn: &Connection, predicate: &str) -> Vec<(String, i64)> {
+    let mut stmt = match conn.prepare(&format!(
+        "SELECT audio_path, audio_bytes FROM recordings \
+         WHERE {predicate} AND audio_status != 'purged'"
+    )) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let rows = match stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))) {
+        Ok(it) => it.filter_map(Result::ok).collect(),
+        Err(_) => Vec::new(),
+    };
+    rows
+}
+
+/// File size on disk, falling back to the recorded byte count when the file is
+/// already gone (or a legacy row never recorded its size).
+fn audio_len(path: &str, fallback: i64) -> i64 {
+    std::fs::metadata(path)
+        .map(|m| m.len() as i64)
+        .unwrap_or(fallback)
+}
+
+/// How many recordings (and bytes) the policy would purge right now, without
+/// changing anything. Used by the Storage section's "clean up now" preview.
+pub fn preview_audio_purge(db: &HistoryDb, policy: &str) -> (i64, i64) {
+    let Some(predicate) = retention_predicate(policy) else {
+        return (0, 0);
     };
     let conn = db.0.lock().unwrap();
-    let paths: Vec<String> = {
-        let mut stmt = match conn.prepare(&format!(
-            "SELECT audio_path FROM recordings WHERE {predicate}"
-        )) {
-            Ok(s) => s,
-            Err(_) => return Vec::new(),
-        };
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0));
-        match rows {
-            Ok(it) => it.filter_map(Result::ok).collect(),
-            Err(_) => Vec::new(),
-        }
+    let rows = pending_audio(&conn, &predicate);
+    let bytes = rows.iter().map(|(p, b)| audio_len(p, *b)).sum();
+    (rows.len() as i64, bytes)
+}
+
+/// Enforce the auto-delete retention `policy` by purging **audio only**: rows
+/// and transcripts are always kept. Returns the audio paths of the purged rows
+/// so the caller can delete the files. Only terminal rows (`done`/`failed`) are
+/// eligible, so a row still `recording`/`transcribing` is never swept out from
+/// under the pipeline. `"never"` and unknown policies are no-ops. Time policies
+/// target audio older than a fixed age; `keep_latest_5` keeps audio for the 5
+/// most recent recordings and purges the rest.
+pub fn enforce_audio_retention(db: &HistoryDb, policy: &str) -> AudioPurge {
+    let Some(predicate) = retention_predicate(policy) else {
+        return AudioPurge::default();
     };
-    let _ = conn.execute(&format!("DELETE FROM recordings WHERE {predicate}"), []);
-    paths
+    let conn = db.0.lock().unwrap();
+    let rows = pending_audio(&conn, &predicate);
+    if rows.is_empty() {
+        return AudioPurge::default();
+    }
+    let bytes = rows.iter().map(|(p, b)| audio_len(p, *b)).sum();
+    let paths: Vec<String> = rows.into_iter().map(|(p, _)| p).collect();
+    let _ = conn.execute(
+        &format!(
+            "UPDATE recordings \
+                SET audio_status = 'purged', audio_bytes = 0, audio_path = '' \
+              WHERE {predicate} AND audio_status != 'purged'"
+        ),
+        [],
+    );
+    AudioPurge { paths, bytes }
+}
+
+/// Eligible-row predicate for a retention policy, or `None` for `"never"` and
+/// unknown values. The cutoff/limit is interpolated from a trusted i64 or a
+/// constant — no user input reaches the SQL string.
+fn retention_predicate(policy: &str) -> Option<String> {
+    match policy {
+        "after_3_days" => Some(time_predicate(3)),
+        "after_2_weeks" => Some(time_predicate(14)),
+        "after_3_months" => Some(time_predicate(90)),
+        "keep_latest_5" => Some(
+            "status IN ('done','failed') AND id NOT IN \
+             (SELECT id FROM recordings ORDER BY created_at DESC LIMIT 5)"
+                .to_string(),
+        ),
+        _ => None,
+    }
 }
 
 /// SQL predicate for a time-based retention policy: terminal rows older than
@@ -949,26 +1009,48 @@ mod tests {
         .unwrap()
     }
 
+    fn audio_of(db: &HistoryDb, id: i64) -> (String, i64, String) {
+        db.0.lock()
+            .unwrap()
+            .query_row(
+                "SELECT audio_status, audio_bytes, audio_path FROM recordings WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap()
+    }
+
     #[test]
-    fn enforce_retention_time_based_drops_old_terminal_rows() {
+    fn enforce_audio_retention_purges_audio_but_keeps_transcripts() {
         let conn = Connection::open_in_memory().unwrap();
         create_schema(&conn).unwrap();
         let day = 86_400_000i64;
         let old = now_millis() - 10 * day;
         let recent = now_millis() - day;
-        mk_row(&conn, old, "/tmp/old.wav", "done");
+        let old_id = mk_row(&conn, old, "/tmp/old.wav", "done");
         // An old row still in flight must NOT be swept out from under the pipeline.
-        mk_row(&conn, old, "/tmp/old_inflight.wav", "transcribing");
-        mk_row(&conn, recent, "/tmp/recent.wav", "done");
+        let inflight_id = mk_row(&conn, old, "/tmp/old_inflight.wav", "transcribing");
+        let recent_id = mk_row(&conn, recent, "/tmp/recent.wav", "done");
         let db = HistoryDb(Mutex::new(conn));
 
-        let removed = enforce_retention(&db, "after_3_days");
-        assert_eq!(removed, vec!["/tmp/old.wav".to_string()]);
-        assert_eq!(list(&db).len(), 2); // in-flight + recent remain
+        let purge = enforce_audio_retention(&db, "after_3_days");
+        assert_eq!(purge.paths, vec!["/tmp/old.wav".to_string()]);
+        assert_eq!(purge.bytes, 100);
+        // Every transcript row survives; only the old row's audio is gone.
+        assert_eq!(list(&db).len(), 3);
+        assert_eq!(audio_of(&db, old_id), ("purged".into(), 0, String::new()));
+        assert_eq!(
+            audio_of(&db, inflight_id),
+            ("ready".into(), 100, "/tmp/old_inflight.wav".into())
+        );
+        assert_eq!(
+            audio_of(&db, recent_id),
+            ("ready".into(), 100, "/tmp/recent.wav".into())
+        );
     }
 
     #[test]
-    fn enforce_retention_keep_latest_5_drops_the_rest() {
+    fn enforce_audio_retention_keep_latest_5_purges_only_older_audio() {
         let conn = Connection::open_in_memory().unwrap();
         create_schema(&conn).unwrap();
         for i in 0..7i64 {
@@ -976,21 +1058,59 @@ mod tests {
         }
         let db = HistoryDb(Mutex::new(conn));
 
-        let removed = enforce_retention(&db, "keep_latest_5");
-        assert_eq!(removed.len(), 2); // the two oldest go
-        assert_eq!(list(&db).len(), 5);
+        let purge = enforce_audio_retention(&db, "keep_latest_5");
+        assert_eq!(purge.count(), 2); // the two oldest go
+        assert_eq!(list(&db).len(), 7); // transcripts all stay
+        let news: Vec<_> = list(&db)
+            .into_iter()
+            .filter(|r| r.audio_status == "ready")
+            .collect();
+        assert_eq!(news.len(), 5);
     }
 
     #[test]
-    fn enforce_retention_never_and_unknown_are_noops() {
+    fn enforce_audio_retention_is_idempotent() {
         let conn = Connection::open_in_memory().unwrap();
         create_schema(&conn).unwrap();
         mk_row(&conn, 1, "/tmp/a.wav", "done");
         let db = HistoryDb(Mutex::new(conn));
 
-        assert!(enforce_retention(&db, "never").is_empty());
-        assert!(enforce_retention(&db, "bogus").is_empty());
+        let first = enforce_audio_retention(&db, "after_3_days");
+        assert_eq!(first.count(), 1);
+        let second = enforce_audio_retention(&db, "after_3_days");
+        assert!(second.paths.is_empty());
+        assert_eq!(second.bytes, 0);
+    }
+
+    #[test]
+    fn preview_audio_purge_matches_the_retention_pass() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        let day = 86_400_000i64;
+        mk_row(&conn, now_millis() - 10 * day, "/tmp/old.wav", "done");
+        mk_row(&conn, now_millis() - day, "/tmp/recent.wav", "done");
+        let db = HistoryDb(Mutex::new(conn));
+
+        let preview = preview_audio_purge(&db, "after_3_days");
+        assert_eq!(preview, (1, 100));
+        // Preview must not mutate the database.
+        assert_eq!(list(&db).len(), 2);
+        let purge = enforce_audio_retention(&db, "after_3_days");
+        assert_eq!((purge.count(), purge.bytes), preview);
+    }
+
+    #[test]
+    fn enforce_audio_retention_never_and_unknown_are_noops() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        mk_row(&conn, 1, "/tmp/a.wav", "done");
+        let db = HistoryDb(Mutex::new(conn));
+
+        assert!(enforce_audio_retention(&db, "never").paths.is_empty());
+        assert!(enforce_audio_retention(&db, "bogus").paths.is_empty());
+        assert_eq!(preview_audio_purge(&db, "never"), (0, 0));
         assert_eq!(list(&db).len(), 1);
+        assert_eq!(audio_of(&db, 1).0, "ready");
     }
 
     #[test]

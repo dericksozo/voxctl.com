@@ -208,6 +208,58 @@
   white-space: nowrap;
 }
 
+/* ---- storage: explicit "clean up now" pass ---- */
+.vx-set-cleanup {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.vx-set-cleanup .vx-btn--danger,
+.vx-set-cleanup-box .vx-btn--danger {
+  color: var(--err);
+  border-color: rgba(255, 45, 45, 0.45);
+}
+.vx-set-cleanup-note {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  line-height: 1.6;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.vx-set-cleanup-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--mag-line);
+  background: var(--mag-soft);
+}
+.vx-set-cleanup-box p {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.6;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+.vx-set-cleanup-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.vx-set-cleanup-msg {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.6;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
 /* free-standing explanatory note (providers section footer) */
 .vx-set-note {
   font-size: 11px;

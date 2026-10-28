@@ -86,6 +86,13 @@ async fn retry_failed(app: &AppHandle) {
     }
     let reg = registry::effective(app);
     for item in rows {
+        // No saved audio (retention purged it, or capture failed) → retrying
+        // can never succeed. Surface it as needing a manual re-run instead of
+        // looping on a read error every interval.
+        if item.audio_status != "ready" {
+            move_to_needs(app, item.id);
+            continue;
+        }
         let Some(model) = reg.model_by_id(&item.model_id) else {
             continue;
         };
